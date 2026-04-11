@@ -8,6 +8,7 @@ linters:
     - dupl
     - errcheck
     - ginkgolinter
+    - gocritic
     - goconst
     - gocyclo
     - govet
