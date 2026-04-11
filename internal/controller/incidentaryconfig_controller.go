@@ -67,11 +67,18 @@ type DiscoveryObserver interface {
 	LastReport() time.Time
 }
 
+// ReconcilerObserver exposes classification counts from the discovery
+// reconciliation loop (matched, ghost, mismatched, new).
+type ReconcilerObserver interface {
+	Counts() (matched, ghost, mismatched, newCount int32)
+}
+
 // IncidentaryConfigReconciler reconciles a IncidentaryConfig object
 type IncidentaryConfigReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Discovery DiscoveryObserver // optional; zero values reported when nil
+	Scheme     *runtime.Scheme
+	Discovery  DiscoveryObserver  // optional; zero values reported when nil
+	Classifier ReconcilerObserver // optional; zero values reported when nil
 }
 
 // --- CRD ---
@@ -184,6 +191,11 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	config.Status.LastReconciliation = &now
 	if r.Discovery != nil {
 		config.Status.WatchedWorkloads = r.Discovery.WatchedWorkloads()
+	}
+	if r.Classifier != nil {
+		matched, _, mismatched, _ := r.Classifier.Counts()
+		config.Status.MatchedServices = matched
+		config.Status.UnmatchedWorkloads = mismatched
 	}
 
 	meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{

@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -126,6 +127,14 @@ func (d *droppingTopologyClient) Report(_ context.Context, report *ingestclient.
 		"workloads", len(report.Workloads),
 	)
 	return &ingestclient.TopologyResponse{Accepted: 0}, nil
+}
+
+// emptyServicesClient returns an empty services list when no API key is
+// configured, which keeps the reconciliation loop in its dormant state.
+type emptyServicesClient struct{}
+
+func (emptyServicesClient) List(context.Context) ([]ingestclient.ServiceEntry, error) {
+	return nil, nil
 }
 
 // getEnvOrDefault returns the value of an environment variable or fallback
@@ -358,6 +367,27 @@ func main() {
 		os.Exit(1)
 	}
 	reconciler.Discovery = discoveryLoop
+
+	// Phase 6: services-list reconciliation loop.
+	var servicesClient ingestclient.ServicesClient
+	if apiKey != "" {
+		servicesClient = ingestclient.NewServicesClient(apiKey,
+			ingestclient.WithServicesEndpoint(os.Getenv("INCIDENTARY_SERVICES_ENDPOINT")))
+	} else {
+		servicesClient = &emptyServicesClient{}
+	}
+	reconcilerLoop := discovery.NewReconciler(
+		mgr.GetClient(),
+		discoveryLoop,
+		servicesClient,
+		ctrl.Log.WithName("reconciler"),
+		5*time.Minute,
+	)
+	if err := mgr.Add(reconcilerLoop); err != nil {
+		setupLog.Error(err, "Failed to add reconciliation loop to controller manager")
+		os.Exit(1)
+	}
+	reconciler.Classifier = reconcilerLoop
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
