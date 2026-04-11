@@ -26,6 +26,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -38,8 +39,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	incidentaryv1alpha1 "github.com/incidentary/operator/api/v1alpha1"
+	"github.com/incidentary/operator/internal/batch"
+	ingestclient "github.com/incidentary/operator/internal/client"
 	"github.com/incidentary/operator/internal/controller"
+	"github.com/incidentary/operator/internal/identity"
 	"github.com/incidentary/operator/internal/informers"
+	"github.com/incidentary/operator/internal/mapper"
+	"github.com/incidentary/operator/internal/wireformat"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -58,13 +64,65 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
-// noopHandler is the Phase-2 placeholder for informers.Handler. Phase 3 will
-// replace it with the real event-processing pipeline.
-type noopHandler struct{}
+// pipelineHandler is the Phase-3 informers.Handler that routes cluster events
+// through the mapper and enqueues the resulting wire format events on the
+// batcher. Unknown object types produce no events (the mapper returns an
+// empty slice).
+type pipelineHandler struct {
+	mapper  *mapper.Mapper
+	batcher *batch.Batcher
+	log     logr.Logger
+}
 
-func (noopHandler) OnAdd(context.Context, client.Object)                   {}
-func (noopHandler) OnUpdate(context.Context, client.Object, client.Object) {}
-func (noopHandler) OnDelete(context.Context, client.Object)                {}
+func (h *pipelineHandler) OnAdd(ctx context.Context, obj client.Object) {
+	h.emit(ctx, nil, obj)
+}
+
+func (h *pipelineHandler) OnUpdate(ctx context.Context, oldObj, newObj client.Object) {
+	h.emit(ctx, oldObj, newObj)
+}
+
+func (h *pipelineHandler) OnDelete(ctx context.Context, obj client.Object) {
+	h.emit(ctx, obj, nil)
+}
+
+func (h *pipelineHandler) emit(ctx context.Context, oldObj, newObj client.Object) {
+	events, err := h.mapper.Dispatch(ctx, oldObj, newObj)
+	if err != nil {
+		h.log.Error(err, "mapper dispatch failed")
+		return
+	}
+	if len(events) == 0 {
+		return
+	}
+	h.batcher.Enqueue(events...)
+}
+
+// droppingIngestClient implements ingestclient.IngestClient by silently
+// discarding every batch. It is installed when INCIDENTARY_API_KEY is not
+// set at startup so the operator can still run (watching, reconciling,
+// exposing metrics) without emitting events.
+type droppingIngestClient struct {
+	log logr.Logger
+}
+
+func (d *droppingIngestClient) Flush(_ context.Context, batch *wireformat.IngestBatch) (ingestclient.FlushResult, error) {
+	d.log.V(1).Info("ingest disabled; dropping batch",
+		"events", len(batch.Events),
+	)
+	return ingestclient.FlushResult{
+		IngestResponse: ingestclient.IngestResponse{Accepted: 0, Dropped: len(batch.Events)},
+	}, nil
+}
+
+// getEnvOrDefault returns the value of an environment variable or fallback
+// when unset or empty.
+func getEnvOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 // nolint:gocyclo
 func main() {
@@ -200,9 +258,58 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Phase 2: register the multi-resource informer manager with a no-op
-	// handler. Phase 3 will swap in the real event-processing pipeline.
-	infMgr := informers.NewManager(mgr, noopHandler{}, ctrl.Log.WithName("informers"))
+	// Phase 3: build the event-processing pipeline.
+	// Resolver → Mapper → Batcher → IngestClient.
+	//
+	// Phase 3b reads the workspace API key from INCIDENTARY_API_KEY at
+	// startup. Phase 4 will switch to resolving it from the Secret referenced
+	// in the IncidentaryConfig CR on every reconcile, so the operator can
+	// pick up key rotations without a restart.
+	apiKey := os.Getenv("INCIDENTARY_API_KEY")
+	ingestEndpoint := os.Getenv("INCIDENTARY_INGEST_ENDPOINT")
+	if apiKey == "" {
+		setupLog.Info("INCIDENTARY_API_KEY is not set; running without an ingest client. " +
+			"The operator will still watch resources but no events will be sent.")
+	}
+
+	var ingest ingestclient.IngestClient
+	if apiKey != "" {
+		ingest = ingestclient.NewHTTPClient(apiKey, ingestclient.WithEndpoint(ingestEndpoint))
+	} else {
+		ingest = &droppingIngestClient{log: ctrl.Log.WithName("ingest")}
+	}
+
+	resource := func() wireformat.Resource {
+		return wireformat.Resource{
+			Attributes: map[string]string{
+				"k8s.cluster.name":   getEnvOrDefault("K8S_CLUSTER_NAME", "unknown"),
+				"k8s.namespace.name": getEnvOrDefault("K8S_NAMESPACE_NAME", ""),
+			},
+		}
+	}
+	agent := func() wireformat.Agent {
+		return wireformat.Agent{
+			Type:        wireformat.AgentTypeK8sOperator,
+			Version:     ingestclient.DefaultAgentVersion,
+			WorkspaceID: getEnvOrDefault("INCIDENTARY_WORKSPACE_ID", ""),
+		}
+	}
+
+	batcher := batch.NewBatcher(ingest, resource, agent, ctrl.Log.WithName("batcher"))
+	if err := mgr.Add(batcher); err != nil {
+		setupLog.Error(err, "Failed to add batcher to controller manager")
+		os.Exit(1)
+	}
+
+	resolver := identity.NewResolver(mgr.GetClient())
+	mpr := mapper.NewMapper(resolver)
+	handler := &pipelineHandler{
+		mapper:  mpr,
+		batcher: batcher,
+		log:     ctrl.Log.WithName("pipeline"),
+	}
+
+	infMgr := informers.NewManager(mgr, handler, ctrl.Log.WithName("informers"))
 	if err := mgr.Add(infMgr); err != nil {
 		setupLog.Error(err, "Failed to add informer manager to controller manager")
 		os.Exit(1)
