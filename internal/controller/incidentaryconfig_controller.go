@@ -59,10 +59,19 @@ const DefaultReconciliationIntervalSeconds = 300
 // like "Secret not found" (may just not have been created yet).
 const RequeueAfterError = 30 * time.Second
 
+// DiscoveryObserver exposes the minimal surface the controller needs from
+// the discovery loop: the current watched-workload count and the timestamp
+// of the most recent successful topology report.
+type DiscoveryObserver interface {
+	WatchedWorkloads() int32
+	LastReport() time.Time
+}
+
 // IncidentaryConfigReconciler reconciles a IncidentaryConfig object
 type IncidentaryConfigReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme    *runtime.Scheme
+	Discovery DiscoveryObserver // optional; zero values reported when nil
 }
 
 // --- CRD ---
@@ -173,6 +182,9 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	now := metav1.Now()
 	config.Status.Phase = PhaseRunning
 	config.Status.LastReconciliation = &now
+	if r.Discovery != nil {
+		config.Status.WatchedWorkloads = r.Discovery.WatchedWorkloads()
+	}
 
 	meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
 		Type:               ConditionTypeReady,

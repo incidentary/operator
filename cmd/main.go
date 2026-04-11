@@ -42,6 +42,7 @@ import (
 	"github.com/incidentary/operator/internal/batch"
 	ingestclient "github.com/incidentary/operator/internal/client"
 	"github.com/incidentary/operator/internal/controller"
+	"github.com/incidentary/operator/internal/discovery"
 	"github.com/incidentary/operator/internal/identity"
 	"github.com/incidentary/operator/internal/informers"
 	"github.com/incidentary/operator/internal/mapper"
@@ -113,6 +114,18 @@ func (d *droppingIngestClient) Flush(_ context.Context, batch *wireformat.Ingest
 	return ingestclient.FlushResult{
 		IngestResponse: ingestclient.IngestResponse{Accepted: 0, Dropped: len(batch.Events)},
 	}, nil
+}
+
+// droppingTopologyClient discards topology reports when the API key is unset.
+type droppingTopologyClient struct {
+	log logr.Logger
+}
+
+func (d *droppingTopologyClient) Report(_ context.Context, report *ingestclient.TopologyReport) (*ingestclient.TopologyResponse, error) {
+	d.log.V(1).Info("topology disabled; dropping report",
+		"workloads", len(report.Workloads),
+	)
+	return &ingestclient.TopologyResponse{Accepted: 0}, nil
 }
 
 // getEnvOrDefault returns the value of an environment variable or fallback
@@ -250,10 +263,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.IncidentaryConfigReconciler{
+	// Controller is constructed before the discovery loop because the
+	// reconciler accepts a nil DiscoveryObserver; the field is wired below
+	// once the loop exists.
+	reconciler := &controller.IncidentaryConfigReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "IncidentaryConfig")
 		os.Exit(1)
 	}
@@ -314,6 +331,33 @@ func main() {
 		setupLog.Error(err, "Failed to add informer manager to controller manager")
 		os.Exit(1)
 	}
+
+	// Phase 4: discovery + topology reporter. Runs on the elected leader
+	// only, scans workloads every 5 minutes (default), and POSTs a topology
+	// report to the v2 API. When INCIDENTARY_API_KEY is unset the topology
+	// client is also replaced with a dropping stub.
+	var topologyClient ingestclient.TopologyClient
+	if apiKey != "" {
+		topologyClient = ingestclient.NewTopologyClient(apiKey,
+			ingestclient.WithTopologyEndpoint(os.Getenv("INCIDENTARY_TOPOLOGY_ENDPOINT")))
+	} else {
+		topologyClient = &droppingTopologyClient{log: ctrl.Log.WithName("topology")}
+	}
+
+	discoveryLoop := discovery.NewLoop(
+		mgr.GetClient(),
+		resolver,
+		topologyClient,
+		ctrl.Log.WithName("discovery"),
+		discovery.Options{
+			ClusterName: getEnvOrDefault("K8S_CLUSTER_NAME", "unknown"),
+		},
+	)
+	if err := mgr.Add(discoveryLoop); err != nil {
+		setupLog.Error(err, "Failed to add discovery loop to controller manager")
+		os.Exit(1)
+	}
+	reconciler.Discovery = discoveryLoop
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
