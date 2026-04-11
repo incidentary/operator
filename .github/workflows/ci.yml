@@ -41,3 +41,44 @@ jobs:
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             -t incidentary-operator:test .
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+          version: v0.23.0
+
+      - name: Install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.0
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+
+      - name: Run helm-based operator E2E
+        run: bash test/e2e/helm-e2e.sh
+        env:
+          CLUSTER_NAME: operator-e2e-ci
+
+      - name: Upload state snapshot on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-e2e-state
+          path: /tmp/operator-e2e-state.json
+          if-no-files-found: ignore
