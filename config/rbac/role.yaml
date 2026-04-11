@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - incidentary.incidentary.io
+  resources:
+  - incidentaryconfigs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - incidentary.incidentary.io
+  resources:
+  - incidentaryconfigs/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - incidentary.incidentary.io
+  resources:
+  - incidentaryconfigs/status
+  verbs:
+  - get
+  - patch
+  - update
