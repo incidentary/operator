@@ -1,2 +1,99 @@
-# incidentary-operator Helm chart values.
-# Populated in Phase 5 of the Kubernetes integration plan.
+# Incidentary operator Helm chart values.
+#
+# The only REQUIRED value is apiKey. Everything else has sensible defaults.
+#
+# Example install:
+#
+#   helm install incidentary oci://ghcr.io/incidentary/charts/operator \
+#     --namespace incidentary-system --create-namespace \
+#     --set apiKey=sk_live_...
+#
+# -----------------------------------------------------------------------------
+
+# apiKey is the Incidentary workspace API key. REQUIRED.
+# Stored in a Kubernetes Secret, referenced by the IncidentaryConfig CR.
+apiKey: ""
+
+# existingSecretName — use a pre-existing Secret instead of creating one from
+# the apiKey value. When set, apiKey is ignored.
+existingSecretName: ""
+
+# existingSecretKey — the key within the existing Secret that holds the API
+# token. Defaults to "token" when unset.
+existingSecretKey: "token"
+
+# Number of operator replicas. Two replicas with leader election gives
+# hot-standby failover. Minimum 1, maximum 2.
+replicaCount: 2
+
+image:
+  repository: ghcr.io/incidentary/operator
+  # tag defaults to .Chart.AppVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# -----------------------------------------------------------------------------
+# Operator configuration — maps to IncidentaryConfig spec fields.
+# -----------------------------------------------------------------------------
+config:
+  # Namespaces the operator scans. Empty = all namespaces except excluded.
+  watchNamespaces: []
+
+  # Namespaces explicitly excluded from scanning.
+  excludeNamespaces:
+    - kube-system
+    - kube-public
+    - kube-node-lease
+
+  # How often the operator re-discovers workloads and sends topology reports.
+  reconciliationIntervalSeconds: 300
+
+  # Event filter. Tier 1 events (crashes, OOMs, failures, deploys) always
+  # pass regardless of this threshold.
+  eventFilters:
+    minSeverity: warning
+
+  # Override the default ingest endpoint (advanced).
+  ingestEndpoint: ""
+
+  # Override the default topology endpoint (advanced).
+  topologyEndpoint: ""
+
+# -----------------------------------------------------------------------------
+# Cluster identification — set by the operator's resource block.
+# -----------------------------------------------------------------------------
+cluster:
+  # Human-readable cluster name, used as resource.k8s.cluster.name.
+  # Strongly recommended — defaults to "unknown" when empty.
+  name: ""
+
+# -----------------------------------------------------------------------------
+# Deployment — resource limits, node scheduling, security.
+# -----------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+podLabels: {}
+podAnnotations: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Health probes.
+# -----------------------------------------------------------------------------
+healthProbeBindAddress: ":8081"
+metricsBindAddress: "0"

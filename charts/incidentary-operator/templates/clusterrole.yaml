@@ -1,0 +1,86 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "incidentary-operator.fullname" . }}
+  labels:
+    {{- include "incidentary-operator.labels" . | nindent 4 }}
+rules:
+  # Pods — pod state transitions, container status, restart counts.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # Core v1 Events — legacy events API (still emitted by some controllers).
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+
+  # Nodes — pressure conditions (memory, disk, PID) and Ready transitions.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Services — selector mapping for auto-discovery topology reports.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+
+  # Namespaces — scanning for scoping annotations and namespace exclusion.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+  # Secrets — reading the API-key Secret referenced in IncidentaryConfig.
+  # NOTE: the operator only reads secrets referenced by the CRD; the
+  # ClusterRole grant is required because the cache client lists all
+  # secrets across namespaces. Scope this down via a namespaced Role if
+  # your threat model requires stricter bounds.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+
+  # Deployments — rollout status, replica counts, revision annotations.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+
+  # StatefulSets — databases, Kafka, stateful workloads.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch"]
+
+  # DaemonSets — log collectors, monitoring agents, CNI.
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "watch"]
+
+  # ReplicaSets — link Deployments to Pods for rollout correlation.
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+
+  # HPAs — scale events.
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+
+  # Jobs — batch pipeline failures.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+
+  # CronJobs — scheduled-job failures.
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch"]
+
+  # Ingresses — routing configuration changes.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+
+  # events.k8s.io/v1 Events — modern events API (pod crashes, OOM kills,
+  # scheduling failures, image pull errors).
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]

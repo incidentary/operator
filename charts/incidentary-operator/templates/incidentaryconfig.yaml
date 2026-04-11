@@ -1,0 +1,28 @@
+apiVersion: incidentary.incidentary.io/v1alpha1
+kind: IncidentaryConfig
+metadata:
+  name: default
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "incidentary-operator.labels" . | nindent 4 }}
+spec:
+  apiKeySecretRef:
+    name: {{ include "incidentary-operator.apiKeySecretName" . }}
+    key: {{ include "incidentary-operator.apiKeySecretKey" . }}
+  {{- with .Values.config.watchNamespaces }}
+  watchNamespaces:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.config.excludeNamespaces }}
+  excludeNamespaces:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  reconciliationIntervalSeconds: {{ .Values.config.reconciliationIntervalSeconds }}
+  eventFilters:
+    minSeverity: {{ .Values.config.eventFilters.minSeverity }}
+  {{- if .Values.config.ingestEndpoint }}
+  ingestEndpoint: {{ .Values.config.ingestEndpoint | quote }}
+  {{- end }}
+  {{- if .Values.config.topologyEndpoint }}
+  topologyEndpoint: {{ .Values.config.topologyEndpoint | quote }}
+  {{- end }}

@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "incidentary-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "incidentary-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "incidentary-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "incidentary-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
