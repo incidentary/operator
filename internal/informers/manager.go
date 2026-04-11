@@ -77,6 +77,13 @@ type Manager struct {
 	log     logr.Logger
 }
 
+// Compile-time assertion that *Manager satisfies the controller-runtime
+// Runnable + LeaderElectionRunnable contract.
+var _ interface {
+	Start(context.Context) error
+	NeedLeaderElection() bool
+} = (*Manager)(nil)
+
 // NewManager constructs a Manager. The handler must be non-nil.
 func NewManager(mgr ctrl.Manager, handler Handler, log logr.Logger) *Manager {
 	if handler == nil {

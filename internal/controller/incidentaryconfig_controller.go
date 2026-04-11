@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -39,7 +40,6 @@ import (
 const (
 	PhaseRunning  = "Running"
 	PhaseDegraded = "Degraded"
-	PhaseError    = "Error"
 )
 
 // Ready condition reasons.
@@ -131,18 +131,23 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			)
 			return r.markDegraded(
 				ctx,
+				log,
 				config,
 				ReasonSecretNotFound,
 				fmt.Sprintf("Secret %q not found in namespace %q", secretKey.Name, secretKey.Namespace),
 				RequeueAfterError,
 			)
 		}
-		log.Error(err, "failed to read API-key Secret")
+		log.Error(err, "failed to read API-key Secret",
+			"secret", secretKey,
+			"key", config.Spec.APIKeySecretRef.Key,
+		)
 		return r.markDegraded(
 			ctx,
+			log,
 			config,
 			ReasonReadError,
-			fmt.Sprintf("failed to read Secret %q: %v", secretKey.Name, err),
+			fmt.Sprintf("error reading Secret %q; check operator logs for details", secretKey.Name),
 			RequeueAfterError,
 		)
 	}
@@ -156,6 +161,7 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		)
 		return r.markDegraded(
 			ctx,
+			log,
 			config,
 			ReasonInvalidAPIKey,
 			fmt.Sprintf("Secret %q key %q is empty", secretKey.Name, config.Spec.APIKeySecretRef.Key),
@@ -187,8 +193,11 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 // markDegraded sets Phase=Degraded and the Ready condition to False with the
 // given reason/message, persists the status, and returns a requeue result.
+// LastReconciliation is intentionally NOT updated on the degraded path — that
+// field records the timestamp of the most recent successful reconciliation.
 func (r *IncidentaryConfigReconciler) markDegraded(
 	ctx context.Context,
+	log logr.Logger,
 	config *incidentaryv1alpha1.IncidentaryConfig,
 	reason string,
 	message string,
@@ -207,6 +216,7 @@ func (r *IncidentaryConfigReconciler) markDegraded(
 	})
 
 	if err := r.Status().Update(ctx, config); err != nil {
+		log.Error(err, "failed to update IncidentaryConfig status (degraded)", "reason", reason)
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
