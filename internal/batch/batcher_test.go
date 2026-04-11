@@ -77,6 +77,28 @@ func event(id string) wireformat.Event {
 	}
 }
 
+// startBatcher runs b.Start on a goroutine and returns a stop closure the
+// caller must defer. The stop closure cancels the context and waits for the
+// Start goroutine to return, which prevents racy log-after-test-complete
+// panics from deferred drain paths.
+func startBatcher(t *testing.T, b *Batcher) func() {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = b.Start(ctx)
+		close(done)
+	}()
+	return func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("batcher Start did not return within 2s of cancel")
+		}
+	}
+}
+
 func TestBatcher_FlushesOnMaxBatchSize(t *testing.T) {
 	c := &fakeClient{}
 	log := testr.New(t)
@@ -84,10 +106,7 @@ func TestBatcher_FlushesOnMaxBatchSize(t *testing.T) {
 		WithFlushInterval(time.Hour), // never via ticker
 		WithMaxBatchSize(3),
 	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = b.Start(ctx) }()
-	defer cancel()
+	defer startBatcher(t, b)()
 
 	b.Enqueue(event("1"), event("2"), event("3"))
 
@@ -112,10 +131,7 @@ func TestBatcher_FlushesOnInterval(t *testing.T) {
 		WithFlushInterval(50*time.Millisecond),
 		WithMaxBatchSize(10000),
 	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = b.Start(ctx) }()
-	defer cancel()
+	defer startBatcher(t, b)()
 
 	b.Enqueue(event("1"))
 	waitFor(t, func() bool { return c.FlushCount() >= 1 })
@@ -131,10 +147,7 @@ func TestBatcher_EmptyBufferNoFlush(t *testing.T) {
 	b := NewBatcher(c, testResource, testAgent, log,
 		WithFlushInterval(30*time.Millisecond),
 	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = b.Start(ctx) }()
-	defer cancel()
+	defer startBatcher(t, b)()
 
 	time.Sleep(100 * time.Millisecond)
 	if c.FlushCount() != 0 {
@@ -182,10 +195,7 @@ func TestBatcher_CaptureModeRequestedPropagated(t *testing.T) {
 	b := NewBatcher(c, testResource, testAgent, log,
 		WithFlushInterval(20*time.Millisecond),
 	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = b.Start(ctx) }()
-	defer cancel()
+	defer startBatcher(t, b)()
 
 	b.Enqueue(event("1"))
 	waitFor(t, func() bool { return b.CaptureModeRequested() == "FULL" })
