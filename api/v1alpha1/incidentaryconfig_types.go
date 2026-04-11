@@ -24,25 +24,94 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // IncidentaryConfigSpec defines the desired state of IncidentaryConfig.
-// Phase 2 will define the real spec fields (apiKeySecretRef, watchNamespaces, etc.).
 type IncidentaryConfigSpec struct {
+	// apiKeySecretRef references the Kubernetes Secret containing the
+	// Incidentary workspace API key.
+	// +kubebuilder:validation:Required
+	APIKeySecretRef SecretKeyRef `json:"apiKeySecretRef"`
+
+	// watchNamespaces restricts the operator to these namespaces.
+	// When empty (default), the operator watches all namespaces except those
+	// listed in excludeNamespaces.
+	// +optional
+	WatchNamespaces []string `json:"watchNamespaces,omitempty"`
+
+	// excludeNamespaces is a list of namespaces the operator will not watch.
+	// Defaults to: kube-system, kube-public, kube-node-lease.
+	// +optional
+	ExcludeNamespaces []string `json:"excludeNamespaces,omitempty"`
+
+	// reconciliationIntervalSeconds is how often the operator re-discovers
+	// workloads and sends topology reports.
+	// +kubebuilder:default=300
+	// +kubebuilder:validation:Minimum=30
+	// +kubebuilder:validation:Maximum=3600
+	// +optional
+	ReconciliationIntervalSeconds int32 `json:"reconciliationIntervalSeconds,omitempty"`
+
+	// eventFilters controls which K8s events are sent to Incidentary.
+	// +optional
+	EventFilters EventFilters `json:"eventFilters,omitempty"`
+
+	// ingestEndpoint overrides the default Incidentary ingest URL.
+	// Default: https://api.incidentary.io/api/v2/ingest
+	// +optional
+	IngestEndpoint string `json:"ingestEndpoint,omitempty"`
+
+	// topologyEndpoint overrides the default Incidentary topology URL.
+	// Default: https://api.incidentary.io/api/v2/workspace/topology
+	// +optional
+	TopologyEndpoint string `json:"topologyEndpoint,omitempty"`
+}
+
+// SecretKeyRef references a specific key within a Kubernetes Secret.
+type SecretKeyRef struct {
+	// name is the Secret name.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// key is the entry within the Secret data that holds the value.
+	// +kubebuilder:validation:Required
+	Key string `json:"key"`
+}
+
+// EventFilters configures the operator's event filtering rules.
+type EventFilters struct {
+	// minSeverity is the lowest severity level that will be sent to Incidentary.
+	// Tier 1 events (crashes, OOMs, failures, deploys) always pass regardless of this threshold.
+	// +kubebuilder:validation:Enum=trace;debug;info;warning;error;fatal
+	// +kubebuilder:default=warning
+	// +optional
+	MinSeverity string `json:"minSeverity,omitempty"`
 }
 
 // IncidentaryConfigStatus defines the observed state of IncidentaryConfig.
 type IncidentaryConfigStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// phase is a high-level summary: Running, Degraded, Error, or empty (not yet reconciled).
+	// +optional
+	Phase string `json:"phase,omitempty"`
 
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// lastReconciliation is the timestamp of the most recent successful reconciliation cycle.
+	// +optional
+	LastReconciliation *metav1.Time `json:"lastReconciliation,omitempty"`
+
+	// watchedWorkloads is the count of Deployments/StatefulSets/DaemonSets currently tracked.
+	// +optional
+	WatchedWorkloads int32 `json:"watchedWorkloads,omitempty"`
+
+	// matchedServices is the count of watched workloads that match an SDK-registered service.
+	// +optional
+	MatchedServices int32 `json:"matchedServices,omitempty"`
+
+	// unmatchedWorkloads is the count of watched workloads that do not match any registered service.
+	// +optional
+	UnmatchedWorkloads int32 `json:"unmatchedWorkloads,omitempty"`
 
 	// conditions represent the current state of the IncidentaryConfig resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
 	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
+	// - "Ready": the operator has successfully reconciled the config and is watching resources
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -53,6 +122,11 @@ type IncidentaryConfigStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Namespaced,shortName=inc
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Watched",type=integer,JSONPath=`.status.watchedWorkloads`
+// +kubebuilder:printcolumn:name="Matched",type=integer,JSONPath=`.status.matchedServices`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // IncidentaryConfig is the Schema for the incidentaryconfigs API
 type IncidentaryConfig struct {

@@ -11,10 +11,25 @@ spec:
     kind: IncidentaryConfig
     listKind: IncidentaryConfigList
     plural: incidentaryconfigs
+    shortNames:
+    - inc
     singular: incidentaryconfig
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.watchedWorkloads
+      name: Watched
+      type: integer
+    - jsonPath: .status.matchedServices
+      name: Matched
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: IncidentaryConfig is the Schema for the incidentaryconfigs API
@@ -38,6 +53,76 @@ spec:
             type: object
           spec:
             description: spec defines the desired state of IncidentaryConfig
+            properties:
+              apiKeySecretRef:
+                description: |-
+                  apiKeySecretRef references the Kubernetes Secret containing the
+                  Incidentary workspace API key.
+                properties:
+                  key:
+                    description: key is the entry within the Secret data that holds
+                      the value.
+                    type: string
+                  name:
+                    description: name is the Secret name.
+                    type: string
+                required:
+                - key
+                - name
+                type: object
+              eventFilters:
+                description: eventFilters controls which K8s events are sent to Incidentary.
+                properties:
+                  minSeverity:
+                    default: warning
+                    description: |-
+                      minSeverity is the lowest severity level that will be sent to Incidentary.
+                      Tier 1 events (crashes, OOMs, failures, deploys) always pass regardless of this threshold.
+                    enum:
+                    - trace
+                    - debug
+                    - info
+                    - warning
+                    - error
+                    - fatal
+                    type: string
+                type: object
+              excludeNamespaces:
+                description: |-
+                  excludeNamespaces is a list of namespaces the operator will not watch.
+                  Defaults to: kube-system, kube-public, kube-node-lease.
+                items:
+                  type: string
+                type: array
+              ingestEndpoint:
+                description: |-
+                  ingestEndpoint overrides the default Incidentary ingest URL.
+                  Default: https://api.incidentary.io/api/v2/ingest
+                type: string
+              reconciliationIntervalSeconds:
+                default: 300
+                description: |-
+                  reconciliationIntervalSeconds is how often the operator re-discovers
+                  workloads and sends topology reports.
+                format: int32
+                maximum: 3600
+                minimum: 30
+                type: integer
+              topologyEndpoint:
+                description: |-
+                  topologyEndpoint overrides the default Incidentary topology URL.
+                  Default: https://api.incidentary.io/api/v2/workspace/topology
+                type: string
+              watchNamespaces:
+                description: |-
+                  watchNamespaces restricts the operator to these namespaces.
+                  When empty (default), the operator watches all namespaces except those
+                  listed in excludeNamespaces.
+                items:
+                  type: string
+                type: array
+            required:
+            - apiKeySecretRef
             type: object
           status:
             description: status defines the observed state of IncidentaryConfig
@@ -48,9 +133,7 @@ spec:
                   Each condition has a unique type and reflects the status of a specific aspect of the resource.
 
                   Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
+                  - "Ready": the operator has successfully reconciled the config and is watching resources
 
                   The status of each condition is one of True, False, or Unknown.
                 items:
@@ -111,6 +194,30 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastReconciliation:
+                description: lastReconciliation is the timestamp of the most recent
+                  successful reconciliation cycle.
+                format: date-time
+                type: string
+              matchedServices:
+                description: matchedServices is the count of watched workloads that
+                  match an SDK-registered service.
+                format: int32
+                type: integer
+              phase:
+                description: 'phase is a high-level summary: Running, Degraded, Error,
+                  or empty (not yet reconciled).'
+                type: string
+              unmatchedWorkloads:
+                description: unmatchedWorkloads is the count of watched workloads
+                  that do not match any registered service.
+                format: int32
+                type: integer
+              watchedWorkloads:
+                description: watchedWorkloads is the count of Deployments/StatefulSets/DaemonSets
+                  currently tracked.
+                format: int32
+                type: integer
             type: object
         required:
         - spec

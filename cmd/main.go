@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -29,6 +30,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -37,6 +39,7 @@ import (
 
 	incidentaryv1alpha1 "github.com/incidentary/operator/api/v1alpha1"
 	"github.com/incidentary/operator/internal/controller"
+	"github.com/incidentary/operator/internal/informers"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -49,8 +52,19 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(incidentaryv1alpha1.AddToScheme(scheme))
+	// informers.AddToScheme is idempotent with clientgoscheme, but we call it
+	// explicitly to document every resource type the operator watches.
+	utilruntime.Must(informers.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
+
+// noopHandler is the Phase-2 placeholder for informers.Handler. Phase 3 will
+// replace it with the real event-processing pipeline.
+type noopHandler struct{}
+
+func (noopHandler) OnAdd(context.Context, client.Object)                   {}
+func (noopHandler) OnUpdate(context.Context, client.Object, client.Object) {}
+func (noopHandler) OnDelete(context.Context, client.Object)                {}
 
 // nolint:gocyclo
 func main() {
@@ -183,6 +197,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "IncidentaryConfig")
+		os.Exit(1)
+	}
+
+	// Phase 2: register the multi-resource informer manager with a no-op
+	// handler. Phase 3 will swap in the real event-processing pipeline.
+	infMgr := informers.NewManager(mgr, noopHandler{}, ctrl.Log.WithName("informers"))
+	if err := mgr.Add(infMgr); err != nil {
+		setupLog.Error(err, "Failed to add informer manager to controller manager")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
