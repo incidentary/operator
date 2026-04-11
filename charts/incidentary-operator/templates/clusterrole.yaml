@@ -84,3 +84,10 @@ rules:
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
+
+  # IncidentaryConfig CRD — controller-runtime's shared cache lists and
+  # watches at cluster scope even when the CR itself is namespaced. Without
+  # this rule, the manager's cache reflector fails with a forbidden error.
+  - apiGroups: ["incidentary.incidentary.io"]
+    resources: ["incidentaryconfigs"]
+    verbs: ["get", "list", "watch"]

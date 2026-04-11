@@ -61,6 +61,10 @@ config:
   # Override the default topology endpoint (advanced).
   topologyEndpoint: ""
 
+  # Override the default services-list endpoint (advanced). The reconciler
+  # polls this to learn which services are SDK-registered.
+  servicesEndpoint: ""
+
 # -----------------------------------------------------------------------------
 # Cluster identification — set by the operator's resource block.
 # -----------------------------------------------------------------------------

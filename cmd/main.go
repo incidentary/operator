@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strconv"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -144,6 +145,20 @@ func getEnvOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseDurationEnv reads an integer-seconds duration from an environment
+// variable, falling back to the supplied default when unset or invalid.
+func parseDurationEnv(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	secs, err := strconv.Atoi(v)
+	if err != nil || secs <= 0 {
+		return fallback
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // nolint:gocyclo
@@ -353,6 +368,7 @@ func main() {
 		topologyClient = &droppingTopologyClient{log: ctrl.Log.WithName("topology")}
 	}
 
+	reconciliationInterval := parseDurationEnv("INCIDENTARY_RECONCILIATION_INTERVAL_SECONDS", 300*time.Second)
 	discoveryLoop := discovery.NewLoop(
 		mgr.GetClient(),
 		resolver,
@@ -360,6 +376,7 @@ func main() {
 		ctrl.Log.WithName("discovery"),
 		discovery.Options{
 			ClusterName: getEnvOrDefault("K8S_CLUSTER_NAME", "unknown"),
+			Interval:    reconciliationInterval,
 		},
 	)
 	if err := mgr.Add(discoveryLoop); err != nil {
@@ -381,7 +398,7 @@ func main() {
 		discoveryLoop,
 		servicesClient,
 		ctrl.Log.WithName("reconciler"),
-		5*time.Minute,
+		reconciliationInterval,
 	)
 	if err := mgr.Add(reconcilerLoop); err != nil {
 		setupLog.Error(err, "Failed to add reconciliation loop to controller manager")

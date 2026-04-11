@@ -56,6 +56,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: INCIDENTARY_RECONCILIATION_INTERVAL_SECONDS
+              value: {{ .Values.config.reconciliationIntervalSeconds | quote }}
             {{- if .Values.config.ingestEndpoint }}
             - name: INCIDENTARY_INGEST_ENDPOINT
               value: {{ .Values.config.ingestEndpoint | quote }}
@@ -63,6 +65,10 @@ spec:
             {{- if .Values.config.topologyEndpoint }}
             - name: INCIDENTARY_TOPOLOGY_ENDPOINT
               value: {{ .Values.config.topologyEndpoint | quote }}
+            {{- end }}
+            {{- if .Values.config.servicesEndpoint }}
+            - name: INCIDENTARY_SERVICES_ENDPOINT
+              value: {{ .Values.config.servicesEndpoint | quote }}
             {{- end }}
           ports:
             - name: health

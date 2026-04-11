@@ -13,6 +13,14 @@ rules:
     resources: ["leases"]
     verbs: ["get", "create", "update"]
 
+  # Leader-election audit events — controller-runtime records a Normal event
+  # on its Lease when a new leader is elected. Scoped to the operator's own
+  # namespace only; the cluster-scoped read on events from the ClusterRole is
+  # for watching, not for creating.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
   # IncidentaryConfig status subresource updates. Scoped to the operator's
   # namespace because the CRD is namespaced.
   - apiGroups: ["incidentary.incidentary.io"]
