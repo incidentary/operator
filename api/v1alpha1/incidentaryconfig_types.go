@@ -23,16 +23,9 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// IncidentaryConfigSpec defines the desired state of IncidentaryConfig
+// IncidentaryConfigSpec defines the desired state of IncidentaryConfig.
+// Phase 2 will define the real spec fields (apiKeySecretRef, watchNamespaces, etc.).
 type IncidentaryConfigSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of IncidentaryConfig. Edit incidentaryconfig_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
 }
 
 // IncidentaryConfigStatus defines the observed state of IncidentaryConfig.
