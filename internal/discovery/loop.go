@@ -23,6 +23,7 @@ package discovery
 
 import (
 	"context"
+	"maps"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 
 	ingestclient "github.com/incidentary/operator/internal/client"
 	"github.com/incidentary/operator/internal/identity"
+	"github.com/incidentary/operator/internal/metrics"
 )
 
 // DefaultInterval is used when Loop is constructed with a zero interval.
@@ -49,14 +51,14 @@ var DefaultExcludedNamespaces = map[string]bool{
 // Loop is a controller-runtime Runnable that periodically scans the cluster
 // for workloads and sends a topology report to the Incidentary API.
 type Loop struct {
-	client       client.Reader
-	resolver     *identity.Resolver
-	topology     ingestclient.TopologyClient
-	log          logr.Logger
-	clusterName  string
-	interval     time.Duration
-	excludes     map[string]bool
-	lastReport   atomic.Value // stores time.Time
+	client         client.Reader
+	resolver       *identity.Resolver
+	topology       ingestclient.TopologyClient
+	log            logr.Logger
+	clusterName    string
+	interval       time.Duration
+	excludes       map[string]bool
+	lastReport     atomic.Value // stores time.Time
 	workloadsGauge atomic.Int32
 }
 
@@ -92,9 +94,7 @@ func NewLoop(
 	}
 
 	excludes := make(map[string]bool, len(DefaultExcludedNamespaces)+len(opts.ExcludeNamespaces))
-	for k, v := range DefaultExcludedNamespaces {
-		excludes[k] = v
-	}
+	maps.Copy(excludes, DefaultExcludedNamespaces)
 	for _, ns := range opts.ExcludeNamespaces {
 		excludes[ns] = true
 	}
@@ -159,6 +159,7 @@ func (l *Loop) runOnce(ctx context.Context) error {
 		return err
 	}
 	l.workloadsGauge.Store(int32(len(workloads))) //nolint:gosec // count is bounded
+	metrics.WatchedWorkloads.Set(float64(len(workloads)))
 
 	if len(workloads) == 0 {
 		l.log.V(1).Info("no workloads discovered")
@@ -175,6 +176,7 @@ func (l *Loop) runOnce(ctx context.Context) error {
 		return err
 	}
 
+	metrics.TopologyReportsTotal.Inc()
 	l.lastReport.Store(time.Now())
 	l.log.Info("topology reported",
 		"workloads", len(workloads),

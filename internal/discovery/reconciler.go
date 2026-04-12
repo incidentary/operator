@@ -28,6 +28,7 @@ import (
 
 	ingestclient "github.com/incidentary/operator/internal/client"
 	"github.com/incidentary/operator/internal/identity"
+	"github.com/incidentary/operator/internal/metrics"
 )
 
 // Classification labels a workload as one of four states based on the
@@ -148,6 +149,11 @@ func (r *Reconciler) Start(ctx context.Context) error {
 // runOnce performs one reconciliation cycle: fetch services, classify
 // workloads, update gauges, log mismatches.
 func (r *Reconciler) runOnce(ctx context.Context) error {
+	start := time.Now()
+	defer func() {
+		metrics.ReconciliationDurationSeconds.Observe(time.Since(start).Seconds())
+	}()
+
 	registered, err := r.services.List(ctx)
 	if err != nil {
 		return fmt.Errorf("reconciler: list services: %w", err)
@@ -200,6 +206,10 @@ func (r *Reconciler) runOnce(ctx context.Context) error {
 	r.ghostGauge.Store(ghost)
 	r.mismatchedGauge.Store(mismatched)
 	r.newGauge.Store(newCount)
+
+	metrics.MatchedServices.Set(float64(matched))
+	metrics.GhostServices.Set(float64(ghost))
+	metrics.UnmatchedWorkloads.Set(float64(mismatched))
 
 	r.log.V(1).Info("reconciliation cycle complete",
 		"registered", len(registered),

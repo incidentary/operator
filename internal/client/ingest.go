@@ -180,10 +180,7 @@ func (c *HTTPClient) Flush(ctx context.Context, batch *wireformat.IngestBatch) (
 		if attempt > 0 {
 			// Add jitter: +/- 20% of backoff.
 			jitterFactor := 1.0 + (c.rand.Float64()*0.4 - 0.2)
-			sleep := time.Duration(float64(backoff) * jitterFactor)
-			if sleep > c.maxBackoff {
-				sleep = c.maxBackoff
-			}
+			sleep := min(time.Duration(float64(backoff)*jitterFactor), c.maxBackoff)
 			if time.Now().Add(sleep).After(deadline) {
 				break
 			}

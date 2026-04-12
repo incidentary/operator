@@ -28,6 +28,13 @@ import (
 	"github.com/incidentary/operator/internal/wireformat"
 )
 
+// Deployment condition reasons used by the heuristic detection helpers.
+const (
+	reasonNewReplicaSetCreated     = "NewReplicaSetCreated"
+	reasonNewReplicaSetAvailable   = "NewReplicaSetAvailable"
+	reasonProgressDeadlineExceeded = "ProgressDeadlineExceeded"
+)
+
 // ----------------------------------------------------------------------------
 // Deployment domain mappers — DEPLOY_* kinds.
 //
@@ -119,7 +126,7 @@ func (m *Mapper) FromDeploymentChange(ctx context.Context, old, n *appsv1.Deploy
 		out = append(out, m.buildDeployEvent(
 			n, serviceID,
 			wireformat.KindDeployFailed,
-			"ProgressDeadlineExceeded",
+			reasonProgressDeadlineExceeded,
 			deploymentOccurredAt(n),
 			map[string]string{
 				"k8s.rollout.revision": newRevision,
@@ -194,12 +201,13 @@ func (m *Mapper) FromStatefulSetChange(ctx context.Context, old, n *appsv1.State
 
 	// DEPLOY_STARTED: update revision just diverged from current revision.
 	if newUpdate != "" && newUpdate != newCurrent {
-		started := false
-		if old == nil {
+		var started bool
+		switch {
+		case old == nil:
 			started = true
-		} else if oldUpdate == oldCurrent {
+		case oldUpdate == oldCurrent:
 			started = true
-		} else if oldUpdate != newUpdate {
+		case oldUpdate != newUpdate:
 			started = true
 		}
 		if started {
@@ -336,7 +344,7 @@ func isDeployStarted(old, n *appsv1.Deployment, oldRev, newRev string) bool {
 	// with NewReplicaSetCreated — a freshly-created Deployment mid-rollout.
 	if old == nil {
 		return progressing.Status == corev1.ConditionTrue &&
-			progressing.Reason == "NewReplicaSetCreated"
+			progressing.Reason == reasonNewReplicaSetCreated
 	}
 	// Strongest signal: revision bumped.
 	if oldRev != newRev {
@@ -344,9 +352,9 @@ func isDeployStarted(old, n *appsv1.Deployment, oldRev, newRev string) bool {
 	}
 	// Progressing became True with NewReplicaSetCreated in this transition.
 	oldProgressing := findDeploymentCondition(old.Status.Conditions, appsv1.DeploymentProgressing)
-	if oldProgressing == nil || oldProgressing.Reason != "NewReplicaSetCreated" {
+	if oldProgressing == nil || oldProgressing.Reason != reasonNewReplicaSetCreated {
 		return progressing.Status == corev1.ConditionTrue &&
-			progressing.Reason == "NewReplicaSetCreated"
+			progressing.Reason == reasonNewReplicaSetCreated
 	}
 	return false
 }
@@ -358,7 +366,7 @@ func isDeploySucceeded(old, n *appsv1.Deployment) bool {
 	if available == nil || available.Status != corev1.ConditionTrue {
 		return false
 	}
-	if progressing == nil || progressing.Reason != "NewReplicaSetAvailable" {
+	if progressing == nil || progressing.Reason != reasonNewReplicaSetAvailable {
 		return false
 	}
 	want := specReplicas(n.Spec.Replicas)
@@ -372,7 +380,7 @@ func isDeploySucceeded(old, n *appsv1.Deployment) bool {
 		return false
 	}
 	oldProgressing := findDeploymentCondition(old.Status.Conditions, appsv1.DeploymentProgressing)
-	if oldProgressing != nil && oldProgressing.Reason == "NewReplicaSetAvailable" {
+	if oldProgressing != nil && oldProgressing.Reason == reasonNewReplicaSetAvailable {
 		return false
 	}
 	return true
@@ -385,14 +393,14 @@ func isDeployFailed(old, n *appsv1.Deployment) bool {
 	if progressing == nil {
 		return false
 	}
-	if progressing.Status != corev1.ConditionFalse || progressing.Reason != "ProgressDeadlineExceeded" {
+	if progressing.Status != corev1.ConditionFalse || progressing.Reason != reasonProgressDeadlineExceeded {
 		return false
 	}
 	if old == nil {
 		return true
 	}
 	oldProgressing := findDeploymentCondition(old.Status.Conditions, appsv1.DeploymentProgressing)
-	if oldProgressing != nil && oldProgressing.Reason == "ProgressDeadlineExceeded" {
+	if oldProgressing != nil && oldProgressing.Reason == reasonProgressDeadlineExceeded {
 		return false
 	}
 	return true

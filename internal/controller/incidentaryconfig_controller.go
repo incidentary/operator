@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -147,7 +146,6 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			)
 			return r.markDegraded(
 				ctx,
-				log,
 				config,
 				ReasonSecretNotFound,
 				fmt.Sprintf("Secret %q not found in namespace %q", secretKey.Name, secretKey.Namespace),
@@ -160,7 +158,6 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		)
 		return r.markDegraded(
 			ctx,
-			log,
 			config,
 			ReasonReadError,
 			fmt.Sprintf("error reading Secret %q; check operator logs for details", secretKey.Name),
@@ -177,7 +174,6 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		)
 		return r.markDegraded(
 			ctx,
-			log,
 			config,
 			ReasonInvalidAPIKey,
 			fmt.Sprintf("Secret %q key %q is empty", secretKey.Name, config.Spec.APIKeySecretRef.Key),
@@ -221,12 +217,12 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // field records the timestamp of the most recent successful reconciliation.
 func (r *IncidentaryConfigReconciler) markDegraded(
 	ctx context.Context,
-	log logr.Logger,
 	config *incidentaryv1alpha1.IncidentaryConfig,
 	reason string,
 	message string,
 	requeueAfter time.Duration,
 ) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
 	now := metav1.Now()
 	config.Status.Phase = PhaseDegraded
 

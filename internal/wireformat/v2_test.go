@@ -63,7 +63,6 @@ func TestKindDomain(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := tc.kind.Domain()
@@ -88,7 +87,6 @@ func TestTimeToUnixNano(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := wireformat.TimeToUnixNano(tc.in)

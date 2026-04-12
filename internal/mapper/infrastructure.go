@@ -147,8 +147,8 @@ func (m *Mapper) FromK8sEvent(ctx context.Context, ev *eventsv1.Event) (wireform
 	}
 
 	attrs := map[string]string{
-		"k8s.reason":             ev.Reason,
-		"k8s.resource.kind":      ev.Regarding.Kind,
+		"k8s.reason":               ev.Reason,
+		"k8s.resource.kind":        ev.Regarding.Kind,
 		"k8s.reporting_controller": ev.ReportingController,
 	}
 	if ev.Regarding.Namespace != "" {
@@ -180,10 +180,7 @@ func (m *Mapper) FromK8sEvent(ctx context.Context, ev *eventsv1.Event) (wireform
 	// Populate series deduplication metadata for repeated events.
 	if ev.Series != nil && ev.Series.Count >= 2 {
 		firstAt := occurredAt
-		lastAt := ev.Series.LastObservedTime.UnixNano()
-		if lastAt < firstAt {
-			lastAt = firstAt
-		}
+		lastAt := max(ev.Series.LastObservedTime.UnixNano(), firstAt)
 		out.Series = &wireformat.Series{
 			Count:   int64(ev.Series.Count),
 			FirstAt: firstAt,
@@ -255,10 +252,7 @@ func (m *Mapper) FromCoreEvent(ctx context.Context, ev *corev1.Event) (wireforma
 	// Count + LastTimestamp (rather than a nested Series block).
 	if ev.Count >= 2 {
 		firstAt := occurredAt
-		lastAt := wireformat.TimeToUnixNano(ev.LastTimestamp.Time)
-		if lastAt < firstAt {
-			lastAt = firstAt
-		}
+		lastAt := max(wireformat.TimeToUnixNano(ev.LastTimestamp.Time), firstAt)
 		out.Series = &wireformat.Series{
 			Count:   int64(ev.Count),
 			FirstAt: firstAt,
@@ -266,10 +260,7 @@ func (m *Mapper) FromCoreEvent(ctx context.Context, ev *corev1.Event) (wireforma
 		}
 	} else if ev.Series != nil && ev.Series.Count >= 2 {
 		firstAt := occurredAt
-		lastAt := ev.Series.LastObservedTime.UnixNano()
-		if lastAt < firstAt {
-			lastAt = firstAt
-		}
+		lastAt := max(ev.Series.LastObservedTime.UnixNano(), firstAt)
 		out.Series = &wireformat.Series{
 			Count:   int64(ev.Series.Count),
 			FirstAt: firstAt,

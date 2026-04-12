@@ -45,9 +45,11 @@ import (
 	ingestclient "github.com/incidentary/operator/internal/client"
 	"github.com/incidentary/operator/internal/controller"
 	"github.com/incidentary/operator/internal/discovery"
+	"github.com/incidentary/operator/internal/filter"
 	"github.com/incidentary/operator/internal/identity"
 	"github.com/incidentary/operator/internal/informers"
 	"github.com/incidentary/operator/internal/mapper"
+	opmetrics "github.com/incidentary/operator/internal/metrics"
 	"github.com/incidentary/operator/internal/wireformat"
 	// +kubebuilder:scaffold:imports
 )
@@ -73,6 +75,7 @@ func init() {
 // empty slice).
 type pipelineHandler struct {
 	mapper  *mapper.Mapper
+	filter  filter.Filter
 	batcher *batch.Batcher
 	log     logr.Logger
 }
@@ -98,7 +101,24 @@ func (h *pipelineHandler) emit(ctx context.Context, oldObj, newObj client.Object
 	if len(events) == 0 {
 		return
 	}
-	h.batcher.Enqueue(events...)
+
+	// Apply Philosophy 1 severity filter.
+	accepted := events[:0]
+	for _, ev := range events {
+		if h.filter.Accept(ev) {
+			accepted = append(accepted, ev)
+		} else {
+			tier := "tier2"
+			if filter.IsTier1(ev.Kind) {
+				tier = "tier1"
+			}
+			opmetrics.EventsFilteredTotal.WithLabelValues(tier).Inc()
+		}
+	}
+	if len(accepted) == 0 {
+		return
+	}
+	h.batcher.Enqueue(accepted...)
 }
 
 // droppingIngestClient implements ingestclient.IngestClient by silently
@@ -109,12 +129,12 @@ type droppingIngestClient struct {
 	log logr.Logger
 }
 
-func (d *droppingIngestClient) Flush(_ context.Context, batch *wireformat.IngestBatch) (ingestclient.FlushResult, error) {
+func (d *droppingIngestClient) Flush(_ context.Context, b *wireformat.IngestBatch) (ingestclient.FlushResult, error) {
 	d.log.V(1).Info("ingest disabled; dropping batch",
-		"events", len(batch.Events),
+		"events", len(b.Events),
 	)
 	return ingestclient.FlushResult{
-		IngestResponse: ingestclient.IngestResponse{Accepted: 0, Dropped: len(batch.Events)},
+		IngestResponse: ingestclient.IngestResponse{Accepted: 0, Dropped: len(b.Events)},
 	}, nil
 }
 
@@ -123,7 +143,9 @@ type droppingTopologyClient struct {
 	log logr.Logger
 }
 
-func (d *droppingTopologyClient) Report(_ context.Context, report *ingestclient.TopologyReport) (*ingestclient.TopologyResponse, error) {
+func (d *droppingTopologyClient) Report(
+	_ context.Context, report *ingestclient.TopologyReport,
+) (*ingestclient.TopologyResponse, error) {
 	d.log.V(1).Info("topology disabled; dropping report",
 		"workloads", len(report.Workloads),
 	)
@@ -160,6 +182,20 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 	}
 	return time.Duration(secs) * time.Second
 }
+
+// leaderMetricRunnable sets incidentary_operator_leader_is_leader to 1 when
+// this instance becomes the leader and back to 0 on shutdown. It implements
+// LeaderElectionRunnable so it only runs on the elected leader.
+type leaderMetricRunnable struct{}
+
+func (leaderMetricRunnable) Start(ctx context.Context) error {
+	opmetrics.LeaderIsLeader.Set(1)
+	<-ctx.Done()
+	opmetrics.LeaderIsLeader.Set(0)
+	return nil
+}
+
+func (leaderMetricRunnable) NeedLeaderElection() bool { return true }
 
 // nolint:gocyclo
 func main() {
@@ -342,10 +378,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	minSeverity := getEnvOrDefault("INCIDENTARY_MIN_SEVERITY", "warning")
+	severityFilter := filter.NewFromString(minSeverity)
+
 	resolver := identity.NewResolver(mgr.GetClient())
 	mpr := mapper.NewMapper(resolver)
 	handler := &pipelineHandler{
 		mapper:  mpr,
+		filter:  severityFilter,
 		batcher: batcher,
 		log:     ctrl.Log.WithName("pipeline"),
 	}
@@ -405,6 +445,12 @@ func main() {
 		os.Exit(1)
 	}
 	reconciler.Classifier = reconcilerLoop
+	// LeaderIsLeader metric: a trivial runnable that sets the gauge to 1 when
+	// the manager elects this instance and back to 0 on context cancellation.
+	if err := mgr.Add(&leaderMetricRunnable{}); err != nil {
+		setupLog.Error(err, "Failed to add leader metric runnable")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

@@ -36,7 +36,7 @@ func (f *fakeServices) List(context.Context) ([]ingestclient.ServiceEntry, error
 	return f.entries, nil
 }
 
-func mkDepWithAnnotation(name, ns string, ageOffset time.Duration, annotation string) *appsv1.Deployment {
+func mkDepWithAnnotation(name string, ageOffset time.Duration, annotation string) *appsv1.Deployment {
 	anno := map[string]string{}
 	if annotation != "" {
 		anno[identity.ServiceIDAnnotation] = annotation
@@ -44,7 +44,7 @@ func mkDepWithAnnotation(name, ns string, ageOffset time.Duration, annotation st
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              name,
-			Namespace:         ns,
+			Namespace:         "prod",
 			Annotations:       anno,
 			CreationTimestamp: metav1.Time{Time: time.Now().Add(-ageOffset)},
 		},
@@ -55,7 +55,7 @@ func TestReconcile_ClassifiesMatched(t *testing.T) {
 	ctx := context.Background()
 	s := newScheme(t)
 	// Workload created long enough ago that grace period has passed.
-	d := mkDepWithAnnotation("payment", "prod", time.Hour, "")
+	d := mkDepWithAnnotation("payment", time.Hour, "")
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
 
 	svc := &fakeServices{entries: []ingestclient.ServiceEntry{
@@ -78,7 +78,7 @@ func TestReconcile_ClassifiesMatched(t *testing.T) {
 func TestReconcile_ClassifiesGhost(t *testing.T) {
 	ctx := context.Background()
 	s := newScheme(t)
-	d := mkDepWithAnnotation("analytics", "prod", time.Hour, "")
+	d := mkDepWithAnnotation("analytics", time.Hour, "")
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
 
 	svc := &fakeServices{entries: []ingestclient.ServiceEntry{
@@ -101,7 +101,7 @@ func TestReconcile_ClassifiesMismatched(t *testing.T) {
 	ctx := context.Background()
 	s := newScheme(t)
 	// Workload exists, age far exceeds grace period.
-	d := mkDepWithAnnotation("payment-svc", "prod", time.Hour, "")
+	d := mkDepWithAnnotation("payment-svc", time.Hour, "")
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
 
 	// Registered service is "payment-service" — Levenshtein distance 2 from
@@ -127,7 +127,7 @@ func TestReconcile_ClassifiesNewWorkloadInGracePeriod(t *testing.T) {
 	ctx := context.Background()
 	s := newScheme(t)
 	// Workload just created — within grace period.
-	d := mkDepWithAnnotation("brand-new", "prod", 10*time.Second, "")
+	d := mkDepWithAnnotation("brand-new", 10*time.Second, "")
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
 
 	svc := &fakeServices{entries: []ingestclient.ServiceEntry{
@@ -149,7 +149,7 @@ func TestReconcile_ClassifiesNewWorkloadInGracePeriod(t *testing.T) {
 func TestReconcile_DormantOnEmptyServices(t *testing.T) {
 	ctx := context.Background()
 	s := newScheme(t)
-	d := mkDepWithAnnotation("web", "prod", time.Hour, "")
+	d := mkDepWithAnnotation("web", time.Hour, "")
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
 
 	svc := &fakeServices{entries: nil}
@@ -175,7 +175,7 @@ func TestReconcile_AnnotationOverride(t *testing.T) {
 	ctx := context.Background()
 	s := newScheme(t)
 	// Workload name is "payment-v2", but annotation overrides to "payment".
-	d := mkDepWithAnnotation("payment-v2", "prod", time.Hour, "payment")
+	d := mkDepWithAnnotation("payment-v2", time.Hour, "payment")
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
 
 	svc := &fakeServices{entries: []ingestclient.ServiceEntry{

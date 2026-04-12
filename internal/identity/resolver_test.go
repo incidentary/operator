@@ -30,6 +30,8 @@ import (
 	"github.com/incidentary/operator/internal/identity"
 )
 
+const kindDeployment = "Deployment"
+
 // newScheme returns a runtime.Scheme registered with corev1 and appsv1.
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -78,8 +80,8 @@ func TestResolve_DeploymentAnnotation(t *testing.T) {
 	if got.Source != identity.SourceAnnotation {
 		t.Fatalf("Source = %q, want %q", got.Source, identity.SourceAnnotation)
 	}
-	if got.OwnerKind != "Deployment" {
-		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, "Deployment")
+	if got.OwnerKind != kindDeployment {
+		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, kindDeployment)
 	}
 	if got.OwnerName != "payments" {
 		t.Fatalf("OwnerName = %q, want %q", got.OwnerName, "payments")
@@ -164,8 +166,8 @@ func TestResolve_PodWalksToDeployment(t *testing.T) {
 	if got.Source != identity.SourceAnnotation {
 		t.Fatalf("Source = %q, want %q", got.Source, identity.SourceAnnotation)
 	}
-	if got.OwnerKind != "Deployment" {
-		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, "Deployment")
+	if got.OwnerKind != kindDeployment {
+		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, kindDeployment)
 	}
 	if got.OwnerName != "checkout" {
 		t.Fatalf("OwnerName = %q, want %q", got.OwnerName, "checkout")
@@ -386,8 +388,8 @@ func TestResolveRef_Pod(t *testing.T) {
 	if got.ServiceID != "checkout" {
 		t.Fatalf("ServiceID = %q, want %q", got.ServiceID, "checkout")
 	}
-	if got.OwnerKind != "Deployment" {
-		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, "Deployment")
+	if got.OwnerKind != kindDeployment {
+		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, kindDeployment)
 	}
 }
 

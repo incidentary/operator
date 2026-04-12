@@ -24,10 +24,10 @@ import (
 
 // deploy constructs a Deployment with the given revision, spec replicas, and
 // conditions. Used as the base for every DEPLOY_* test case.
-func deploy(name string, revision string, replicas int32, conds ...appsv1.DeploymentCondition) *appsv1.Deployment {
+func deploy(revision string, replicas int32, conds ...appsv1.DeploymentCondition) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      "web",
 			Namespace: "prod",
 			Annotations: map[string]string{
 				"deployment.kubernetes.io/revision": revision,
@@ -54,10 +54,10 @@ func cond(typ appsv1.DeploymentConditionType, status corev1.ConditionStatus, rea
 // -----------------------------------------------------------------------------
 
 func TestFromDeploymentChange_DeployStarted_RevisionBump(t *testing.T) {
-	old := deploy("web", "3", 3,
+	old := deploy("3", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetAvailable"),
 	)
-	new := deploy("web", "4", 3,
+	new := deploy("4", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetCreated"),
 	)
 	m := newTestMapper(t)
@@ -75,11 +75,11 @@ func TestFromDeploymentChange_DeployStarted_RevisionBump(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestFromDeploymentChange_DeploySucceeded(t *testing.T) {
-	old := deploy("web", "4", 3,
+	old := deploy("4", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"),
 		cond(appsv1.DeploymentAvailable, corev1.ConditionFalse, ""),
 	)
-	new := deploy("web", "4", 3,
+	new := deploy("4", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetAvailable"),
 		cond(appsv1.DeploymentAvailable, corev1.ConditionTrue, ""),
 	)
@@ -98,7 +98,7 @@ func TestFromDeploymentChange_DeploySucceeded(t *testing.T) {
 
 func TestFromDeploymentChange_DeploySucceeded_NotOnOnAdd(t *testing.T) {
 	// OnAdd of an already-stable Deployment should NOT emit DEPLOY_SUCCEEDED.
-	new := deploy("web", "4", 3,
+	new := deploy("4", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetAvailable"),
 		cond(appsv1.DeploymentAvailable, corev1.ConditionTrue, ""),
 	)
@@ -120,10 +120,10 @@ func TestFromDeploymentChange_DeploySucceeded_NotOnOnAdd(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestFromDeploymentChange_DeployFailed(t *testing.T) {
-	old := deploy("web", "5", 3,
+	old := deploy("5", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"),
 	)
-	new := deploy("web", "5", 3,
+	new := deploy("5", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionFalse, "ProgressDeadlineExceeded"),
 	)
 
@@ -142,8 +142,8 @@ func TestFromDeploymentChange_DeployFailed(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestFromDeploymentChange_DeployRolledBack_RevisionDecrease(t *testing.T) {
-	old := deploy("web", "5", 3)
-	new := deploy("web", "3", 3,
+	old := deploy("5", 3)
+	new := deploy("3", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetCreated"),
 	)
 
@@ -162,9 +162,9 @@ func TestFromDeploymentChange_DeployRolledBack_RevisionDecrease(t *testing.T) {
 }
 
 func TestFromDeploymentChange_DeployRolledBack_ChangeCause(t *testing.T) {
-	old := deploy("web", "4", 3)
+	old := deploy("4", 3)
 	old.Annotations["kubernetes.io/change-cause"] = "kubectl apply"
-	new := deploy("web", "5", 3,
+	new := deploy("5", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetCreated"),
 	)
 	new.Annotations["kubernetes.io/change-cause"] = "kubectl rollback to revision 3"
@@ -184,10 +184,10 @@ func TestFromDeploymentChange_DeployRolledBack_ChangeCause(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestFromDeploymentChange_DeployCancelled_ScaleToZero(t *testing.T) {
-	old := deploy("web", "5", 3,
+	old := deploy("5", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"),
 	)
-	new := deploy("web", "5", 0,
+	new := deploy("5", 0,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"),
 	)
 
@@ -202,7 +202,7 @@ func TestFromDeploymentChange_DeployCancelled_ScaleToZero(t *testing.T) {
 }
 
 func TestFromDeploymentDelete_MidRollout(t *testing.T) {
-	d := deploy("web", "5", 3,
+	d := deploy("5", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"),
 	)
 
@@ -220,7 +220,7 @@ func TestFromDeploymentDelete_MidRollout(t *testing.T) {
 }
 
 func TestFromDeploymentDelete_Stable(t *testing.T) {
-	d := deploy("web", "5", 3,
+	d := deploy("5", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetAvailable"),
 	)
 	// A stable Deployment (NewReplicaSetAvailable) being deleted is just cleanup.

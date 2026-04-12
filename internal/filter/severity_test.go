@@ -38,7 +38,6 @@ func TestParseSeverity(t *testing.T) {
 		{wireformat.SeverityFatal, filter.LevelFatal},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(string(tc.in), func(t *testing.T) {
 			t.Parallel()
 			got := filter.ParseSeverity(tc.in)
@@ -74,7 +73,6 @@ func TestAccept_Tier1AlwaysPasses(t *testing.T) {
 		wireformat.KindK8sHPAScale,
 	}
 	for _, k := range tier1 {
-		k := k
 		t.Run(string(k), func(t *testing.T) {
 			t.Parallel()
 			ev := wireformat.Event{Kind: k, Severity: wireformat.SeverityTrace}
@@ -98,7 +96,6 @@ func TestAccept_DeployAlwaysPasses(t *testing.T) {
 		wireformat.KindDeployRolledBack,
 	}
 	for _, k := range deployKinds {
-		k := k
 		t.Run(string(k), func(t *testing.T) {
 			t.Parallel()
 			ev := wireformat.Event{Kind: k, Severity: wireformat.SeverityInfo}
@@ -161,7 +158,6 @@ func TestNewFromString(t *testing.T) {
 		{"garbage", filter.LevelWarning}, // unknown defaults to warning
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
 			f := filter.NewFromString(tc.in)

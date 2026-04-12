@@ -31,6 +31,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/incidentary/operator/internal/client"
+	"github.com/incidentary/operator/internal/metrics"
 	"github.com/incidentary/operator/internal/wireformat"
 )
 
@@ -68,7 +69,7 @@ type Batcher struct {
 
 	// captureModeReq holds the most recently observed value of the
 	// X-Capture-Mode-Requested response header. Phase 7 will consume this.
-	captureMu     sync.RWMutex
+	captureMu      sync.RWMutex
 	captureModeReq string
 
 	// flushCh kicks the flush goroutine when the buffer reaches max size
@@ -224,9 +225,28 @@ func (b *Batcher) flushNow(ctx context.Context) error {
 		Events:      events,
 	}
 
+	metrics.FlushBatchSize.Observe(float64(len(events)))
+
+	start := time.Now()
 	res, err := b.client.Flush(ctx, batch)
+	metrics.FlushLatencySeconds.Observe(time.Since(start).Seconds())
+
 	if err != nil {
 		return err
+	}
+
+	// Record per-kind accepted events.
+	kindCounts := make(map[string]int, len(events))
+	for i := range events {
+		kindCounts[string(events[i].Kind)]++
+	}
+	for kind, count := range kindCounts {
+		metrics.EventsSentTotal.WithLabelValues(kind).Add(float64(count))
+	}
+
+	// Record per-reason dropped events.
+	for reason, count := range res.DropReasons {
+		metrics.EventsDroppedTotal.WithLabelValues(reason).Add(float64(count))
 	}
 
 	if res.CaptureModeRequested != "" {
@@ -235,7 +255,7 @@ func (b *Batcher) flushNow(ctx context.Context) error {
 		b.captureMu.Unlock()
 	}
 	if res.Dropped > 0 {
-		b.log.V(0).Info("ingest dropped events",
+		b.log.Info("ingest dropped events",
 			"dropped", res.Dropped,
 			"accepted", res.Accepted,
 			"dropReasons", res.DropReasons,
