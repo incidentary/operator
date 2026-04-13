@@ -70,8 +70,8 @@ var k8sEventReasonMappings = map[string]reasonMapping{
 	"FailedSync": {regardingKinds: []string{"Pod"}, kind: wireformat.KindK8sPodCrash},
 
 	// OOM kill.
-	"OOMKilling":               {regardingKinds: []string{"Pod", "Node"}, kind: wireformat.KindK8sOOMKill},
-	containerReasonOOMKilled:   {regardingKinds: []string{"Pod"}, kind: wireformat.KindK8sOOMKill},
+	"OOMKilling":             {regardingKinds: []string{"Pod", "Node"}, kind: wireformat.KindK8sOOMKill},
+	containerReasonOOMKilled: {regardingKinds: []string{"Pod"}, kind: wireformat.KindK8sOOMKill},
 
 	// Eviction (pods kicked off a node due to resource pressure).
 	"Evicted": {regardingKinds: []string{"Pod"}, kind: wireformat.KindK8sEviction},
