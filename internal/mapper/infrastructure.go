@@ -52,6 +52,10 @@ type reasonMapping struct {
 	kind           wireformat.Kind
 }
 
+// containerReasonOOMKilled is the termination reason set by the kubelet when
+// the Linux OOM killer terminates a container.
+const containerReasonOOMKilled = "OOMKilled"
+
 // k8sEventReasonMappings is the closed set of K8s Event reasons the operator
 // translates into v2 events. Reasons not in this table are ignored.
 var k8sEventReasonMappings = map[string]reasonMapping{
@@ -66,8 +70,8 @@ var k8sEventReasonMappings = map[string]reasonMapping{
 	"FailedSync": {regardingKinds: []string{"Pod"}, kind: wireformat.KindK8sPodCrash},
 
 	// OOM kill.
-	"OOMKilling": {regardingKinds: []string{"Pod", "Node"}, kind: wireformat.KindK8sOOMKill},
-	"OOMKilled":  {regardingKinds: []string{"Pod"}, kind: wireformat.KindK8sOOMKill},
+	"OOMKilling":               {regardingKinds: []string{"Pod", "Node"}, kind: wireformat.KindK8sOOMKill},
+	containerReasonOOMKilled:   {regardingKinds: []string{"Pod"}, kind: wireformat.KindK8sOOMKill},
 
 	// Eviction (pods kicked off a node due to resource pressure).
 	"Evicted": {regardingKinds: []string{"Pod"}, kind: wireformat.KindK8sEviction},
@@ -457,7 +461,7 @@ func (m *Mapper) FromHPAScale(_ context.Context, old, n *autoscalingv2.Horizonta
 
 // FromPodStatusChange emits K8S_POD_STARTED when a Pod transitions into
 // Running and K8S_POD_TERMINATED when it transitions into Succeeded / Failed.
-// When a Failed pod has a container that terminated with reason "OOMKilled",
+// When a Failed pod has a container that terminated with reason containerReasonOOMKilled,
 // K8S_OOM_KILL is emitted instead — it is a Tier 1 kind that bypasses the
 // severity filter, ensuring OOM events always reach the backend regardless of
 // the configured minSeverity threshold.
@@ -492,7 +496,7 @@ func (m *Mapper) FromPodStatusChange(ctx context.Context, old, n *corev1.Pod) ([
 				// Upgrade to K8S_OOM_KILL so the event is Tier 1 and bypasses
 				// the severity filter — OOM kills must always be delivered.
 				kind = wireformat.KindK8sOOMKill
-				reason = "OOMKilled"
+				reason = containerReasonOOMKilled
 			} else {
 				reason = "Failed"
 			}
@@ -508,10 +512,10 @@ func (m *Mapper) FromPodStatusChange(ctx context.Context, old, n *corev1.Pod) ([
 }
 
 // podContainerOOMKilled reports whether any container in the pod was terminated
-// with reason "OOMKilled" (exit code 137 from the Linux OOM killer).
+// with reason containerReasonOOMKilled (exit code 137 from the Linux OOM killer).
 func podContainerOOMKilled(pod *corev1.Pod) bool {
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason == containerReasonOOMKilled {
 			return true
 		}
 	}

@@ -358,8 +358,8 @@ func TestFromPodStatusChange_Failed(t *testing.T) {
 
 func TestFromPodStatusChange_OOMKilled(t *testing.T) {
 	// A naked pod (no owner) that was OOM killed: container terminated with
-	// reason "OOMKilled". Verify the mapper emits K8S_OOM_KILL (Tier 1, always
-	// passes the severity filter) with the pod name as service ID.
+	// reason containerReasonOOMKilled. Verify the mapper emits K8S_OOM_KILL
+	// (Tier 1, always passes the severity filter) with the pod name as service ID.
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "oom-victim", Namespace: "demo"},
 		Status: corev1.PodStatus{
@@ -368,7 +368,7 @@ func TestFromPodStatusChange_OOMKilled(t *testing.T) {
 				{
 					State: corev1.ContainerState{
 						Terminated: &corev1.ContainerStateTerminated{
-							Reason:     "OOMKilled",
+							Reason:     containerReasonOOMKilled,
 							ExitCode:   137,
 							FinishedAt: metav1.Time{Time: time.Now()},
 						},
@@ -393,7 +393,7 @@ func TestFromPodStatusChange_OOMKilled(t *testing.T) {
 	if out[0].Attributes["k8s.exit_code"] != "137" {
 		t.Errorf("exit_code attr = %q, want 137", out[0].Attributes["k8s.exit_code"])
 	}
-	if out[0].Attributes["k8s.reason"] != "OOMKilled" {
-		t.Errorf("k8s.reason attr = %q, want OOMKilled", out[0].Attributes["k8s.reason"])
+	if out[0].Attributes["k8s.reason"] != containerReasonOOMKilled {
+		t.Errorf("k8s.reason attr = %q, want %q", out[0].Attributes["k8s.reason"], containerReasonOOMKilled)
 	}
 }
