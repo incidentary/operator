@@ -355,3 +355,45 @@ func TestFromPodStatusChange_Failed(t *testing.T) {
 		t.Errorf("exit_code attr = %q, want 1", out[0].Attributes["k8s.exit_code"])
 	}
 }
+
+func TestFromPodStatusChange_OOMKilled(t *testing.T) {
+	// A naked pod (no owner) that was OOM killed: container terminated with
+	// reason "OOMKilled". Verify the mapper emits K8S_OOM_KILL (Tier 1, always
+	// passes the severity filter) with the pod name as service ID.
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "oom-victim", Namespace: "demo"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodFailed,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:     "OOMKilled",
+							ExitCode:   137,
+							FinishedAt: metav1.Time{Time: time.Now()},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Simulate an ADD event: old=nil, new=pod already in Failed phase.
+	m := newTestMapper(t, pod)
+	out, err := m.FromPodStatusChange(context.Background(), nil, pod)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(out) != 1 || out[0].Kind != wireformat.KindK8sOOMKill {
+		t.Fatalf("got %+v, want 1 K8S_OOM_KILL", out)
+	}
+	if out[0].ServiceID != "oom-victim" {
+		t.Errorf("ServiceID = %q, want %q", out[0].ServiceID, "oom-victim")
+	}
+	if out[0].Attributes["k8s.exit_code"] != "137" {
+		t.Errorf("exit_code attr = %q, want 137", out[0].Attributes["k8s.exit_code"])
+	}
+	if out[0].Attributes["k8s.reason"] != "OOMKilled" {
+		t.Errorf("k8s.reason attr = %q, want OOMKilled", out[0].Attributes["k8s.reason"])
+	}
+}

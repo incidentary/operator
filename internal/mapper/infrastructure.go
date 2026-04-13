@@ -457,6 +457,10 @@ func (m *Mapper) FromHPAScale(_ context.Context, old, n *autoscalingv2.Horizonta
 
 // FromPodStatusChange emits K8S_POD_STARTED when a Pod transitions into
 // Running and K8S_POD_TERMINATED when it transitions into Succeeded / Failed.
+// When a Failed pod has a container that terminated with reason "OOMKilled",
+// K8S_OOM_KILL is emitted instead — it is a Tier 1 kind that bypasses the
+// severity filter, ensuring OOM events always reach the backend regardless of
+// the configured minSeverity threshold.
 func (m *Mapper) FromPodStatusChange(ctx context.Context, old, n *corev1.Pod) ([]wireformat.Event, error) {
 	if n == nil {
 		return nil, nil
@@ -481,11 +485,19 @@ func (m *Mapper) FromPodStatusChange(ctx context.Context, old, n *corev1.Pod) ([
 		}
 		return []wireformat.Event{ev}, nil
 	case corev1.PodSucceeded, corev1.PodFailed:
+		kind := wireformat.KindK8sPodTerminated
 		reason := "Completed"
 		if newPhase == corev1.PodFailed {
-			reason = "Failed"
+			if podContainerOOMKilled(n) {
+				// Upgrade to K8S_OOM_KILL so the event is Tier 1 and bypasses
+				// the severity filter — OOM kills must always be delivered.
+				kind = wireformat.KindK8sOOMKill
+				reason = "OOMKilled"
+			} else {
+				reason = "Failed"
+			}
 		}
-		ev, err := m.buildPodLifecycleEvent(ctx, n, wireformat.KindK8sPodTerminated, reason)
+		ev, err := m.buildPodLifecycleEvent(ctx, n, kind, reason)
 		if err != nil {
 			return nil, err
 		}
@@ -493,6 +505,17 @@ func (m *Mapper) FromPodStatusChange(ctx context.Context, old, n *corev1.Pod) ([
 	default:
 		return nil, nil
 	}
+}
+
+// podContainerOOMKilled reports whether any container in the pod was terminated
+// with reason "OOMKilled" (exit code 137 from the Linux OOM killer).
+func podContainerOOMKilled(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Mapper) buildPodLifecycleEvent(ctx context.Context, pod *corev1.Pod, kind wireformat.Kind, reason string) (wireformat.Event, error) {
@@ -528,7 +551,7 @@ func (m *Mapper) buildPodLifecycleEvent(ctx context.Context, pod *corev1.Pod, ki
 		if pod.Status.StartTime != nil {
 			occurredAt = wireformat.TimeToUnixNano(pod.Status.StartTime.Time)
 		}
-	case wireformat.KindK8sPodTerminated:
+	case wireformat.KindK8sPodTerminated, wireformat.KindK8sOOMKill:
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.State.Terminated != nil {
 				occurredAt = wireformat.TimeToUnixNano(cs.State.Terminated.FinishedAt.Time)
