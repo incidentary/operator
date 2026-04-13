@@ -21,6 +21,7 @@ package informers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -33,6 +34,8 @@ import (
 	clientcache "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/manager"
+
+	opmetrics "github.com/incidentary/operator/internal/metrics"
 )
 
 // WatchSet is the list of every resource kind the operator watches.
@@ -75,6 +78,16 @@ type Manager struct {
 	mgr     ctrl.Manager
 	handler Handler
 	log     logr.Logger
+
+	// informerStores holds (label, store) pairs populated during Start().
+	// Used by the cache size reporting goroutine.
+	informerStores []labeledStore
+}
+
+// labeledStore pairs a Prometheus metric label with an informer store.
+type labeledStore struct {
+	label string
+	store clientcache.Store
 }
 
 // Compile-time assertion that *Manager satisfies the controller-runtime
@@ -113,10 +126,18 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("informers.Manager: controller-runtime cache is nil")
 	}
 
-	for _, obj := range WatchSet {
+	for i, obj := range WatchSet {
 		informer, err := cache.GetInformer(ctx, obj)
 		if err != nil {
 			return fmt.Errorf("get informer for %T: %w", obj, err)
+		}
+
+		// Capture the underlying store for cache size reporting.
+		if si, ok := informer.(clientcache.SharedInformer); ok {
+			m.informerStores = append(m.informerStores, labeledStore{
+				label: watchSetLabels[i],
+				store: si.GetStore(),
+			})
 		}
 
 		// Capture obj type for logging; the handler receives the concrete
@@ -155,9 +176,58 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 	}
 
-	m.log.Info("informers registered", "count", len(WatchSet))
+	m.log.Info("informers registered", "count", len(WatchSet), "stores", len(m.informerStores))
+	go m.reportCacheSizesLoop(ctx)
 	<-ctx.Done()
 	return nil
+}
+
+// cacheReportInterval controls how often informer cache sizes are sampled.
+const cacheReportInterval = 30 * time.Second
+
+// watchSetLabels maps each WatchSet index to its Prometheus metric label.
+// Order must match WatchSet exactly.
+var watchSetLabels = []string{
+	"pods",
+	"events_core",
+	"events_v1",
+	"nodes",
+	"services",
+	"namespaces",
+	"deployments",
+	"statefulsets",
+	"daemonsets",
+	"replicasets",
+	"hpas",
+	"jobs",
+	"cronjobs",
+	"ingresses",
+}
+
+// reportCacheSizesLoop periodically samples informer store lengths and sets
+// the InformerCacheSize gauge for each resource type.
+func (m *Manager) reportCacheSizesLoop(ctx context.Context) {
+	ticker := time.NewTicker(cacheReportInterval)
+	defer ticker.Stop()
+
+	m.reportCacheSizes()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.reportCacheSizes()
+		}
+	}
+}
+
+// reportCacheSizes performs a single cache size snapshot.
+func (m *Manager) reportCacheSizes() {
+	for _, ls := range m.informerStores {
+		count := len(ls.store.List())
+		opmetrics.InformerCacheSize.WithLabelValues(ls.label).Set(float64(count))
+	}
 }
 
 // AddToScheme registers every WatchSet object type's GroupVersion with the
