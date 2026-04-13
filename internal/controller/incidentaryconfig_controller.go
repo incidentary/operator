@@ -81,9 +81,9 @@ type IncidentaryConfigReconciler struct {
 }
 
 // --- CRD ---
-// +kubebuilder:rbac:groups=incidentary.incidentary.io,resources=incidentaryconfigs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=incidentary.incidentary.io,resources=incidentaryconfigs/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=incidentary.incidentary.io,resources=incidentaryconfigs/finalizers,verbs=update
+// +kubebuilder:rbac:groups=incidentary.incidentary.com,resources=incidentaryconfigs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=incidentary.incidentary.com,resources=incidentaryconfigs/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=incidentary.incidentary.com,resources=incidentaryconfigs/finalizers,verbs=update
 //
 // --- Secret (for API-key lookup) ---
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch

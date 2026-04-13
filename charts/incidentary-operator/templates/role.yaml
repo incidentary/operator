@@ -23,9 +23,9 @@ rules:
 
   # IncidentaryConfig status subresource updates. Scoped to the operator's
   # namespace because the CRD is namespaced.
-  - apiGroups: ["incidentary.incidentary.io"]
+  - apiGroups: ["incidentary.incidentary.com"]
     resources: ["incidentaryconfigs"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  - apiGroups: ["incidentary.incidentary.io"]
+  - apiGroups: ["incidentary.incidentary.com"]
     resources: ["incidentaryconfigs/status"]
     verbs: ["get", "update", "patch"]

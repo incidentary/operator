@@ -19,7 +19,7 @@ import (
 )
 
 // DefaultServicesEndpoint is the Incidentary API path for the services list.
-const DefaultServicesEndpoint = "https://api.incidentary.io/api/v2/workspace/services"
+const DefaultServicesEndpoint = "https://api.incidentary.com/api/v2/workspace/services"
 
 // ServiceEntry is one row of the services list response.
 type ServiceEntry struct {

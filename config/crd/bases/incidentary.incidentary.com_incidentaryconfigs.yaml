@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: incidentaryconfigs.incidentary.incidentary.io
+  name: incidentaryconfigs.incidentary.incidentary.com
 spec:
-  group: incidentary.incidentary.io
+  group: incidentary.incidentary.com
   names:
     kind: IncidentaryConfig
     listKind: IncidentaryConfigList
@@ -97,7 +97,7 @@ spec:
               ingestEndpoint:
                 description: |-
                   ingestEndpoint overrides the default Incidentary ingest URL.
-                  Default: https://api.incidentary.io/api/v2/ingest
+                  Default: https://api.incidentary.com/api/v2/ingest
                 type: string
               reconciliationIntervalSeconds:
                 default: 300
@@ -111,7 +111,7 @@ spec:
               topologyEndpoint:
                 description: |-
                   topologyEndpoint overrides the default Incidentary topology URL.
-                  Default: https://api.incidentary.io/api/v2/workspace/topology
+                  Default: https://api.incidentary.com/api/v2/workspace/topology
                 type: string
               watchNamespaces:
                 description: |-

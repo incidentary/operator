@@ -21,7 +21,7 @@ See https://incidentary.com/ for the Incidentary platform.
   POSTs a topology report to the Incidentary backend every 5 minutes
   (configurable). Populates ghost services with real K8s metadata.
 - Resolves a per-event `service_id` from an
-  `incidentary.io/service-id` annotation when present, falling back to the
+  `incidentary.com/service-id` annotation when present, falling back to the
   owning workload's name (per the D4 mapping rule in the plan).
 - Runs in HA mode with 2 replicas and controller-runtime leader election;
   event processing only runs on the active leader.
@@ -62,9 +62,9 @@ helm install incidentary ./charts/incidentary-operator \
 | `cluster.name` | — | `K8S_CLUSTER_NAME` | `unknown` |
 | `config.reconciliationIntervalSeconds` | `reconciliationIntervalSeconds` | `INCIDENTARY_RECONCILIATION_INTERVAL_SECONDS` | `300` |
 | `config.eventFilters.minSeverity` | `eventFilters.minSeverity` | — | `warning` |
-| `config.ingestEndpoint` | `ingestEndpoint` | `INCIDENTARY_INGEST_ENDPOINT` | `https://api.incidentary.io/api/v2/ingest` |
-| `config.topologyEndpoint` | `topologyEndpoint` | `INCIDENTARY_TOPOLOGY_ENDPOINT` | `https://api.incidentary.io/api/v2/workspace/topology` |
-| `config.servicesEndpoint` | — | `INCIDENTARY_SERVICES_ENDPOINT` | `https://api.incidentary.io/api/v2/workspace/services` |
+| `config.ingestEndpoint` | `ingestEndpoint` | `INCIDENTARY_INGEST_ENDPOINT` | `https://api.incidentary.com/api/v2/ingest` |
+| `config.topologyEndpoint` | `topologyEndpoint` | `INCIDENTARY_TOPOLOGY_ENDPOINT` | `https://api.incidentary.com/api/v2/workspace/topology` |
+| `config.servicesEndpoint` | — | `INCIDENTARY_SERVICES_ENDPOINT` | `https://api.incidentary.com/api/v2/workspace/services` |
 | `config.excludeNamespaces` | `excludeNamespaces` | — | `kube-system, kube-public, kube-node-lease` |
 | `replicaCount` | — | — | `2` |
 
@@ -72,7 +72,7 @@ helm install incidentary ./charts/incidentary-operator \
 
 | Annotation | Effect |
 |------------|--------|
-| `incidentary.io/service-id: <value>` | Overrides the derived `service_id` for all events owned by this workload. Takes precedence over the workload's `metadata.name`. |
+| `incidentary.com/service-id: <value>` | Overrides the derived `service_id` for all events owned by this workload. Takes precedence over the workload's `metadata.name`. |
 
 ## Health, metrics, and status
 

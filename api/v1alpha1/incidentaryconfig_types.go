@@ -54,12 +54,12 @@ type IncidentaryConfigSpec struct {
 	EventFilters EventFilters `json:"eventFilters,omitempty"`
 
 	// ingestEndpoint overrides the default Incidentary ingest URL.
-	// Default: https://api.incidentary.io/api/v2/ingest
+	// Default: https://api.incidentary.com/api/v2/ingest
 	// +optional
 	IngestEndpoint string `json:"ingestEndpoint,omitempty"`
 
 	// topologyEndpoint overrides the default Incidentary topology URL.
-	// Default: https://api.incidentary.io/api/v2/workspace/topology
+	// Default: https://api.incidentary.com/api/v2/workspace/topology
 	// +optional
 	TopologyEndpoint string `json:"topologyEndpoint,omitempty"`
 }

@@ -33,7 +33,7 @@ import (
 
 // Defaults for the ingest HTTP client.
 const (
-	DefaultEndpoint       = "https://api.incidentary.io/api/v2/ingest"
+	DefaultEndpoint       = "https://api.incidentary.com/api/v2/ingest"
 	DefaultAgentVersion   = "0.1.0"
 	DefaultTimeout        = 30 * time.Second
 	DefaultMaxRetries     = 5

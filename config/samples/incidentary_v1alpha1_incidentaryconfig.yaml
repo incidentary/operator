@@ -1,4 +1,4 @@
-apiVersion: incidentary.incidentary.io/v1alpha1
+apiVersion: incidentary.incidentary.com/v1alpha1
 kind: IncidentaryConfig
 metadata:
   labels:

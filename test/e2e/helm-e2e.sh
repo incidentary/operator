@@ -339,7 +339,7 @@ spec:
     metadata:
       labels: { app: payment-service }
       annotations:
-        incidentary.io/service-id: payment-service
+        incidentary.com/service-id: payment-service
     spec:
       containers:
         - name: app

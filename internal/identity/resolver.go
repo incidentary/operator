@@ -22,7 +22,7 @@ limitations under the License.
 // returns the object itself when it is already a recognized workload type.
 //
 // The authoritative source for a workload's service_id is the annotation
-// `incidentary.io/service-id`. When absent, the resolver falls back to the
+// `incidentary.com/service-id`. When absent, the resolver falls back to the
 // workload's metadata.name.
 package identity
 
@@ -40,7 +40,7 @@ import (
 // ServiceIDAnnotation is the per-workload annotation that overrides the
 // default service_id (workload name). It is the authoritative source for
 // service identity resolution.
-const ServiceIDAnnotation = "incidentary.io/service-id"
+const ServiceIDAnnotation = "incidentary.com/service-id"
 
 // Source describes how a service_id was derived. Reported per workload in the
 // topology report, not on individual v2 events.

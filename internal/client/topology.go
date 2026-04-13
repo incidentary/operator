@@ -27,7 +27,7 @@ import (
 )
 
 // DefaultTopologyEndpoint is the Incidentary API path for topology reports.
-const DefaultTopologyEndpoint = "https://api.incidentary.io/api/v2/workspace/topology"
+const DefaultTopologyEndpoint = "https://api.incidentary.com/api/v2/workspace/topology"
 
 // TopologyWorkload is a single workload entry in a topology report.
 type TopologyWorkload struct {

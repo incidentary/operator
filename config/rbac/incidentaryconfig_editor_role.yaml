@@ -1,7 +1,7 @@
 # This rule is not used by the project incidentary-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants permissions to create, update, and delete resources within the incidentary.incidentary.io.
+# Grants permissions to create, update, and delete resources within the incidentary.incidentary.com.
 # This role is intended for users who need to manage these resources
 # but should not control RBAC or manage permissions for others.
 
@@ -14,7 +14,7 @@ metadata:
   name: incidentaryconfig-editor-role
 rules:
 - apiGroups:
-  - incidentary.incidentary.io
+  - incidentary.incidentary.com
   resources:
   - incidentaryconfigs
   verbs:
@@ -26,7 +26,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - incidentary.incidentary.io
+  - incidentary.incidentary.com
   resources:
   - incidentaryconfigs/status
   verbs:

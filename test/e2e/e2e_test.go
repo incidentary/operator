@@ -283,7 +283,7 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to create API key secret")
 
 			By("applying an IncidentaryConfig CR")
-			crYAML := fmt.Sprintf(`apiVersion: incidentary.io/v1alpha1
+			crYAML := fmt.Sprintf(`apiVersion: incidentary.incidentary.com/v1alpha1
 kind: IncidentaryConfig
 metadata:
   name: %s
@@ -357,7 +357,7 @@ spec:
 			crName := "test-bad-secret"
 
 			By("applying a CR referencing a non-existent secret")
-			crYAML := fmt.Sprintf(`apiVersion: incidentary.io/v1alpha1
+			crYAML := fmt.Sprintf(`apiVersion: incidentary.incidentary.com/v1alpha1
 kind: IncidentaryConfig
 metadata:
   name: %s

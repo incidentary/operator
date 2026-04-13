@@ -62,7 +62,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - incidentary.incidentary.io
+  - incidentary.incidentary.com
   resources:
   - incidentaryconfigs
   verbs:
@@ -74,13 +74,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - incidentary.incidentary.io
+  - incidentary.incidentary.com
   resources:
   - incidentaryconfigs/finalizers
   verbs:
   - update
 - apiGroups:
-  - incidentary.incidentary.io
+  - incidentary.incidentary.com
   resources:
   - incidentaryconfigs/status
   verbs:
