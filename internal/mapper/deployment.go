@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/incidentary/operator/internal/ids"
 	"github.com/incidentary/operator/internal/wireformat"
 )
 
@@ -492,7 +492,7 @@ func (m *Mapper) buildDeployEvent(
 		}
 	}
 	return wireformat.Event{
-		ID:         uuid.NewString(),
+		ID:         ids.NewID(),
 		Kind:       kind,
 		Severity:   severityForKind(kind),
 		OccurredAt: occurredAt,

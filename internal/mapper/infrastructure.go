@@ -22,12 +22,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	eventsv1 "k8s.io/api/events/v1"
 
+	"github.com/incidentary/operator/internal/ids"
 	"github.com/incidentary/operator/internal/wireformat"
 )
 
@@ -173,7 +173,7 @@ func (m *Mapper) FromK8sEvent(ctx context.Context, ev *eventsv1.Event) (wireform
 	}
 
 	out := wireformat.Event{
-		ID:         uuid.NewString(),
+		ID:         ids.NewID(),
 		Kind:       kind,
 		Severity:   severityForKind(kind),
 		OccurredAt: occurredAt,
@@ -244,7 +244,7 @@ func (m *Mapper) FromCoreEvent(ctx context.Context, ev *corev1.Event) (wireforma
 	}
 
 	out := wireformat.Event{
-		ID:         uuid.NewString(),
+		ID:         ids.NewID(),
 		Kind:       kind,
 		Severity:   severityForKind(kind),
 		OccurredAt: occurredAt,
@@ -381,7 +381,7 @@ func (m *Mapper) nodePressureEvent(node *corev1.Node, reason string, cond *corev
 	}
 
 	return wireformat.Event{
-		ID:         uuid.NewString(),
+		ID:         ids.NewID(),
 		Kind:       wireformat.KindK8sNodePressure,
 		Severity:   severityForKind(wireformat.KindK8sNodePressure),
 		OccurredAt: occurredAt,
@@ -446,7 +446,7 @@ func (m *Mapper) FromHPAScale(_ context.Context, old, n *autoscalingv2.Horizonta
 	// LastScaleTime is *metav1.Time — nil → zero.
 
 	return wireformat.Event{
-		ID:         uuid.NewString(),
+		ID:         ids.NewID(),
 		Kind:       wireformat.KindK8sHPAScale,
 		Severity:   severityForKind(wireformat.KindK8sHPAScale),
 		OccurredAt: occurredAt,
@@ -575,7 +575,7 @@ func (m *Mapper) buildPodLifecycleEvent(ctx context.Context, pod *corev1.Pod, ki
 	}
 
 	return wireformat.Event{
-		ID:         uuid.NewString(),
+		ID:         ids.NewID(),
 		Kind:       kind,
 		Severity:   severityForKind(kind),
 		OccurredAt: occurredAt,
@@ -657,7 +657,7 @@ func (m *Mapper) FromDeploymentRollout(ctx context.Context, old, n *appsv1.Deplo
 	}
 
 	ev := wireformat.Event{
-		ID:         uuid.NewString(),
+		ID:         ids.NewID(),
 		Kind:       wireformat.KindK8sDeployRollout,
 		Severity:   severityForKind(wireformat.KindK8sDeployRollout),
 		OccurredAt: occurredAt,
