@@ -183,9 +183,9 @@ type AgentTelemetry struct {
 // Wire-format mapping: wire-format-v2.md section 7.
 type Event struct {
 	// ID is a UUID string (RFC 9562) uniquely identifying this event.
-	// Used for deduplication on retry. The operator emits UUIDv7 via
-	// the ids.NewID() helper for time-ordered sort-key locality; the
-	// wire format accepts v1/v4/v7 transparently.
+	// Used for deduplication on retry. The operator emits UUIDv4 via
+	// the ids.NewID() helper; the wire format accepts v1/v4/v7
+	// transparently (identical 128-bit binary representation).
 	ID string `json:"id"`
 
 	// Kind is the structural category of the event.
