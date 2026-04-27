@@ -1,11 +1,13 @@
 # incidentary-operator
 
-Kubernetes operator for Incidentary — watches cluster events and reports
-infrastructure telemetry to the Incidentary v2 ingest API.
+Read-only Kubernetes operator that captures cluster-side incident
+telemetry — OOMKilled containers, pod evictions, schedule failures,
+deploy rollouts, HPA scale events — and ships them to the Incidentary
+v2 ingest API or any compatible backend.
 
-Status: Alpha — under active development.
+Apache 2.0. Go 1.25. HA via controller-runtime leader election.
 
-See https://incidentary.com/ for the Incidentary platform.
+Status: alpha. Wire format is stable; CRD shape may change before v1.0.
 
 ## What it does
 
