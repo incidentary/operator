@@ -184,3 +184,86 @@ func TestFlush_ContextCancelled(t *testing.T) {
 		t.Fatal("expected error from cancelled ctx")
 	}
 }
+
+func TestWithHTTPClient_OverridesTransport(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(IngestResponse{Accepted: 1})
+	}))
+	defer srv.Close()
+
+	custom := &http.Client{}
+	c := NewHTTPClient("sk", WithEndpoint(srv.URL), WithHTTPClient(custom))
+	if _, err := c.Flush(context.Background(), testBatch()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("expected custom http client to reach the server")
+	}
+}
+
+func TestWithMaxRetries_LimitsAttempts(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient("sk",
+		WithEndpoint(srv.URL),
+		WithMaxRetries(1),
+		WithRetryBackoff(5*time.Millisecond, 10*time.Millisecond, 5*time.Second),
+	)
+	if _, err := c.Flush(context.Background(), testBatch()); err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("calls = %d, want 2 (maxRetries=1 → 2 total attempts)", got)
+	}
+}
+
+// TestFlush_DeadlineExpiresBreaksRetryLoop covers the deadline-exceeded branch
+// inside the retry loop that fires before sleeping when the window is exhausted.
+func TestFlush_DeadlineExpiresBreaksRetryLoop(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	// Window of 1ns expires before the first sleep (50ms) fires.
+	c := NewHTTPClient("sk",
+		WithEndpoint(srv.URL),
+		WithMaxRetries(5),
+		WithRetryBackoff(50*time.Millisecond, 100*time.Millisecond, 1*time.Nanosecond),
+	)
+	if _, err := c.Flush(context.Background(), testBatch()); err == nil {
+		t.Fatal("expected error when retry window expires")
+	}
+}
+
+// TestFlush_ExhaustsAllRetries covers the post-loop return and the backoff cap.
+func TestFlush_ExhaustsAllRetries(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	// initialBackoff=5ms, maxBackoff=6ms: after the first retry backoff doubles
+	// to 10ms > 6ms, triggering the backoff-cap branch.
+	c := NewHTTPClient("sk",
+		WithEndpoint(srv.URL),
+		WithMaxRetries(2),
+		WithRetryBackoff(5*time.Millisecond, 6*time.Millisecond, 5*time.Second),
+	)
+	if _, err := c.Flush(context.Background(), testBatch()); err == nil {
+		t.Fatal("expected error after exhausting all retries")
+	}
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Errorf("calls = %d, want 3 (maxRetries=2 → 3 total attempts)", got)
+	}
+}
