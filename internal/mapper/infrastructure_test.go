@@ -428,3 +428,131 @@ func TestFromPodStatusChange_OOMKilled(t *testing.T) {
 		t.Errorf("k8s.reason attr = %q, want %q", out[0].Attributes["k8s.reason"], containerReasonOOMKilled)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// FromDeploymentRollout
+// -----------------------------------------------------------------------------
+
+func progressingCondition(status corev1.ConditionStatus, reason string) appsv1.DeploymentCondition {
+	return appsv1.DeploymentCondition{
+		Type:   appsv1.DeploymentProgressing,
+		Status: status,
+		Reason: reason,
+	}
+}
+
+func deploymentWithProgressing(name, ns string, cond appsv1.DeploymentCondition) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{cond},
+		},
+	}
+}
+
+func TestFromDeploymentRollout_NilNewReturnsNil(t *testing.T) {
+	m := newTestMapper(t)
+	evts, err := m.FromDeploymentRollout(context.Background(), nil, nil)
+	if err != nil || evts != nil {
+		t.Errorf("got %v, %v; want nil, nil", evts, err)
+	}
+}
+
+func TestFromDeploymentRollout_StatusUnchangedReturnsNil(t *testing.T) {
+	m := newTestMapper(t)
+	dep := deploymentWithProgressing("web", "prod",
+		progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
+	)
+	evts, err := m.FromDeploymentRollout(context.Background(), dep.DeepCopy(), dep)
+	if err != nil || evts != nil {
+		t.Errorf("got %v, %v; want nil, nil when status unchanged", evts, err)
+	}
+}
+
+func TestFromDeploymentRollout_NilOldToProgressingEmitsEvent(t *testing.T) {
+	m := newTestMapper(t)
+	newDep := deploymentWithProgressing("web", "prod",
+		progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
+	)
+	evts, err := m.FromDeploymentRollout(context.Background(), nil, newDep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evts) != 1 {
+		t.Fatalf("got %d events, want 1", len(evts))
+	}
+	if evts[0].Kind != wireformat.KindK8sDeployRollout {
+		t.Errorf("kind = %q, want %q", evts[0].Kind, wireformat.KindK8sDeployRollout)
+	}
+	if evts[0].Attributes["k8s.rollout.status"] != "progressing" {
+		t.Errorf("rollout.status = %v, want progressing", evts[0].Attributes["k8s.rollout.status"])
+	}
+}
+
+func TestFromDeploymentRollout_ProgressingToCompleteEmitsEvent(t *testing.T) {
+	m := newTestMapper(t)
+	oldDep := deploymentWithProgressing("web", "prod",
+		progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
+	)
+	newDep := deploymentWithProgressing("web", "prod",
+		progressingCondition(corev1.ConditionTrue, "NewReplicaSetAvailable"),
+	)
+	evts, err := m.FromDeploymentRollout(context.Background(), oldDep, newDep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evts) != 1 {
+		t.Fatalf("got %d events, want 1", len(evts))
+	}
+	if evts[0].Attributes["k8s.rollout.status"] != "complete" {
+		t.Errorf("rollout.status = %v, want complete", evts[0].Attributes["k8s.rollout.status"])
+	}
+}
+
+func TestFromDeploymentRollout_WithRevisionAnnotationSetsAttr(t *testing.T) {
+	m := newTestMapper(t)
+	newDep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "web",
+			Namespace: "prod",
+			Annotations: map[string]string{
+				"deployment.kubernetes.io/revision": "3",
+			},
+		},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
+			},
+		},
+	}
+	evts, err := m.FromDeploymentRollout(context.Background(), nil, newDep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evts) != 1 {
+		t.Fatalf("got %d events, want 1", len(evts))
+	}
+	if evts[0].Attributes["k8s.rollout.revision"] != 3 {
+		t.Errorf("k8s.rollout.revision = %v, want 3 (int)", evts[0].Attributes["k8s.rollout.revision"])
+	}
+}
+
+func TestFromDeploymentRollout_ProgressingToFailedEmitsEvent(t *testing.T) {
+	m := newTestMapper(t)
+	oldDep := deploymentWithProgressing("web", "prod",
+		progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
+	)
+	newDep := deploymentWithProgressing("web", "prod",
+		progressingCondition(corev1.ConditionFalse, "ProgressDeadlineExceeded"),
+	)
+	evts, err := m.FromDeploymentRollout(context.Background(), oldDep, newDep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evts) != 1 {
+		t.Fatalf("got %d events, want 1", len(evts))
+	}
+	if evts[0].Attributes["k8s.rollout.status"] != "failed" {
+		t.Errorf("rollout.status = %v, want failed", evts[0].Attributes["k8s.rollout.status"])
+	}
+}
