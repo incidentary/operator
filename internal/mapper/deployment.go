@@ -88,9 +88,9 @@ func (m *Mapper) FromDeploymentChange(ctx context.Context, old, n *appsv1.Deploy
 			wireformat.KindDeployRolledBack,
 			"RolledBack",
 			deploymentOccurredAt(n),
-			map[string]string{
-				"k8s.rollout.revision":      newRevision,
-				"k8s.rollout.prev_revision": oldRevision,
+			map[string]any{
+				"k8s.rollout.revision":      revisionAttr(newRevision),
+				"k8s.rollout.prev_revision": revisionAttr(oldRevision),
 				"k8s.rollout.change_cause":  newChangeCause,
 			},
 		)}, nil
@@ -104,8 +104,8 @@ func (m *Mapper) FromDeploymentChange(ctx context.Context, old, n *appsv1.Deploy
 			wireformat.KindDeployStarted,
 			"Started",
 			deploymentOccurredAt(n),
-			map[string]string{
-				"k8s.rollout.revision": newRevision,
+			map[string]any{
+				"k8s.rollout.revision": revisionAttr(newRevision),
 			},
 		))
 	}
@@ -116,8 +116,8 @@ func (m *Mapper) FromDeploymentChange(ctx context.Context, old, n *appsv1.Deploy
 			wireformat.KindDeploySucceeded,
 			"Succeeded",
 			deploymentOccurredAt(n),
-			map[string]string{
-				"k8s.rollout.revision": newRevision,
+			map[string]any{
+				"k8s.rollout.revision": revisionAttr(newRevision),
 			},
 		))
 	}
@@ -128,8 +128,8 @@ func (m *Mapper) FromDeploymentChange(ctx context.Context, old, n *appsv1.Deploy
 			wireformat.KindDeployFailed,
 			reasonProgressDeadlineExceeded,
 			deploymentOccurredAt(n),
-			map[string]string{
-				"k8s.rollout.revision": newRevision,
+			map[string]any{
+				"k8s.rollout.revision": revisionAttr(newRevision),
 			},
 		))
 	}
@@ -140,8 +140,8 @@ func (m *Mapper) FromDeploymentChange(ctx context.Context, old, n *appsv1.Deploy
 			wireformat.KindDeployCancelled,
 			"ScaleToZero",
 			deploymentOccurredAt(n),
-			map[string]string{
-				"k8s.rollout.revision": newRevision,
+			map[string]any{
+				"k8s.rollout.revision": revisionAttr(newRevision),
 			},
 		))
 	}
@@ -159,6 +159,13 @@ func (m *Mapper) FromDeploymentDelete(ctx context.Context, d *appsv1.Deployment)
 	if progressing == nil || progressing.Status != corev1.ConditionTrue {
 		return wireformat.Event{}, false, nil
 	}
+	// A stable deployment (last rollout completed successfully) has
+	// Progressing=True with Reason=NewReplicaSetAvailable. Deleting such a
+	// deployment is routine cleanup, not a mid-rollout cancellation — suppress
+	// the false-positive DEPLOY_CANCELLED.
+	if progressing.Reason == reasonNewReplicaSetAvailable {
+		return wireformat.Event{}, false, nil
+	}
 
 	serviceID, err := m.resolveWorkloadServiceID(ctx, "Deployment", d.Namespace, d.Name)
 	if err != nil {
@@ -170,8 +177,8 @@ func (m *Mapper) FromDeploymentDelete(ctx context.Context, d *appsv1.Deployment)
 		wireformat.KindDeployCancelled,
 		"DeletedMidRollout",
 		deploymentOccurredAt(d),
-		map[string]string{
-			"k8s.rollout.revision": d.Annotations["deployment.kubernetes.io/revision"],
+		map[string]any{
+			"k8s.rollout.revision": revisionAttr(d.Annotations["deployment.kubernetes.io/revision"]),
 		},
 	)
 	return ev, true, nil
@@ -216,7 +223,7 @@ func (m *Mapper) FromStatefulSetChange(ctx context.Context, old, n *appsv1.State
 				wireformat.KindDeployStarted,
 				"Started",
 				wireformat.TimeToUnixNano(n.CreationTimestamp.Time),
-				map[string]string{
+				map[string]any{
 					"k8s.rollout.revision": newUpdate,
 					"k8s.rollout.current":  newCurrent,
 					"k8s.resource.kind":    "StatefulSet",
@@ -235,7 +242,7 @@ func (m *Mapper) FromStatefulSetChange(ctx context.Context, old, n *appsv1.State
 			wireformat.KindDeploySucceeded,
 			"Succeeded",
 			wireformat.TimeToUnixNano(n.CreationTimestamp.Time),
-			map[string]string{
+			map[string]any{
 				"k8s.rollout.revision": newUpdate,
 				"k8s.resource.kind":    "StatefulSet",
 			},
@@ -278,8 +285,8 @@ func (m *Mapper) FromDaemonSetChange(ctx context.Context, old, n *appsv1.DaemonS
 			wireformat.KindDeployStarted,
 			"Started",
 			wireformat.TimeToUnixNano(n.CreationTimestamp.Time),
-			map[string]string{
-				"k8s.rollout.generation": fmt.Sprintf("%d", newGen),
+			map[string]any{
+				"k8s.rollout.generation": newGen,
 				"k8s.resource.kind":      "DaemonSet",
 			},
 		))
@@ -293,8 +300,8 @@ func (m *Mapper) FromDaemonSetChange(ctx context.Context, old, n *appsv1.DaemonS
 			wireformat.KindDeploySucceeded,
 			"Succeeded",
 			wireformat.TimeToUnixNano(n.CreationTimestamp.Time),
-			map[string]string{
-				"k8s.rollout.generation": fmt.Sprintf("%d", newGen),
+			map[string]any{
+				"k8s.rollout.generation": newGen,
 				"k8s.resource.kind":      "DaemonSet",
 			},
 		))
@@ -329,6 +336,27 @@ func revisionLess(a, b string) bool {
 		return a < b
 	}
 	return ai < bi
+}
+
+// parseRevision parses a Kubernetes revision annotation string into an int.
+// Returns an error when s is empty or not an integer — callers fall back to
+// the raw string so revision info is never silently dropped.
+func parseRevision(s string) (int, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty revision")
+	}
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
+}
+
+// revisionAttr converts a Kubernetes revision annotation string to an int when
+// possible, keeping the raw string as fallback so no revision info is lost.
+func revisionAttr(s string) any {
+	if n, err := parseRevision(s); err == nil {
+		return n
+	}
+	return s
 }
 
 // isDeployStarted returns true when a new rollout just started.
@@ -467,12 +495,12 @@ func (m *Mapper) buildDeployEvent(
 	kind wireformat.Kind,
 	reason string,
 	occurredAt int64,
-	extra map[string]string,
+	extra map[string]any,
 ) wireformat.Event {
 	labels := obj.GetLabels()
 	annotations := obj.GetAnnotations()
 
-	attrs := map[string]string{
+	attrs := map[string]any{
 		"k8s.namespace.name": obj.GetNamespace(),
 		"k8s.workload.name":  obj.GetName(),
 		"k8s.reason":         reason,
@@ -487,7 +515,11 @@ func (m *Mapper) buildDeployEvent(
 		attrs["k8s.change_cause"] = truncate(cc, 512)
 	}
 	for k, v := range extra {
-		if v != "" {
+		if s, isStr := v.(string); isStr {
+			if s != "" {
+				attrs[k] = s
+			}
+		} else if v != nil {
 			attrs[k] = v
 		}
 	}

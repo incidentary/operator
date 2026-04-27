@@ -19,7 +19,6 @@ package mapper
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -150,7 +149,7 @@ func (m *Mapper) FromK8sEvent(ctx context.Context, ev *eventsv1.Event) (wireform
 		serviceID = ev.Regarding.Name
 	}
 
-	attrs := map[string]string{
+	attrs := map[string]any{
 		"k8s.reason":               ev.Reason,
 		"k8s.resource.kind":        ev.Regarding.Kind,
 		"k8s.reporting_controller": ev.ReportingController,
@@ -218,7 +217,7 @@ func (m *Mapper) FromCoreEvent(ctx context.Context, ev *corev1.Event) (wireforma
 		serviceID = ev.InvolvedObject.Name
 	}
 
-	attrs := map[string]string{
+	attrs := map[string]any{
 		"k8s.reason":               ev.Reason,
 		"k8s.resource.kind":        ev.InvolvedObject.Kind,
 		"k8s.reporting_controller": ev.ReportingController,
@@ -291,7 +290,7 @@ func matchReason(reason, regardingKind string) (wireformat.Kind, bool) {
 }
 
 // setPodAttrs populates k8s.pod.name when the regarding object is a Pod.
-func setPodAttrs(attrs map[string]string, ref corev1.ObjectReference) {
+func setPodAttrs(attrs map[string]any, ref corev1.ObjectReference) {
 	if strings.EqualFold(ref.Kind, "Pod") && ref.Name != "" {
 		attrs["k8s.pod.name"] = ref.Name
 	}
@@ -363,7 +362,7 @@ func (m *Mapper) FromNodeConditionChange(_ context.Context, oldNode, newNode *co
 }
 
 func (m *Mapper) nodePressureEvent(node *corev1.Node, reason string, cond *corev1.NodeCondition) wireformat.Event {
-	attrs := map[string]string{
+	attrs := map[string]any{
 		"k8s.resource.kind": "Node",
 		"k8s.node.name":     node.Name,
 		"k8s.reason":        reason,
@@ -422,17 +421,17 @@ func (m *Mapper) FromHPAScale(_ context.Context, old, n *autoscalingv2.Horizonta
 		reason = "ScaleDown"
 	}
 
-	attrs := map[string]string{
+	attrs := map[string]any{
 		"k8s.hpa.name":             n.Name,
 		"k8s.namespace.name":       n.Namespace,
-		"k8s.hpa.current_replicas": strconv.Itoa(int(n.Status.CurrentReplicas)),
-		"k8s.hpa.desired_replicas": strconv.Itoa(int(n.Status.DesiredReplicas)),
+		"k8s.hpa.current_replicas": int(n.Status.CurrentReplicas),
+		"k8s.hpa.desired_replicas": int(n.Status.DesiredReplicas),
 		"k8s.reason":               reason,
 	}
 	if n.Spec.MinReplicas != nil {
-		attrs["k8s.hpa.min_replicas"] = strconv.Itoa(int(*n.Spec.MinReplicas))
+		attrs["k8s.hpa.min_replicas"] = int(*n.Spec.MinReplicas)
 	}
-	attrs["k8s.hpa.max_replicas"] = strconv.Itoa(int(n.Spec.MaxReplicas))
+	attrs["k8s.hpa.max_replicas"] = int(n.Spec.MaxReplicas)
 
 	// The HPA target workload provides the service identity. We cannot
 	// resolve it via Resolver without a cross-namespace lookup, so we rely
@@ -442,8 +441,11 @@ func (m *Mapper) FromHPAScale(_ context.Context, old, n *autoscalingv2.Horizonta
 		serviceID = n.Name
 	}
 
-	occurredAt := wireformat.TimeToUnixNano(n.Status.LastScaleTime.Time)
-	// LastScaleTime is *metav1.Time — nil → zero.
+	// LastScaleTime is *metav1.Time and may be nil when the HPA has never fired.
+	var occurredAt int64
+	if n.Status.LastScaleTime != nil {
+		occurredAt = wireformat.TimeToUnixNano(n.Status.LastScaleTime.Time)
+	}
 
 	return wireformat.Event{
 		ID:         ids.NewID(),
@@ -532,7 +534,7 @@ func (m *Mapper) buildPodLifecycleEvent(ctx context.Context, pod *corev1.Pod, ki
 		serviceID = pod.Name
 	}
 
-	attrs := map[string]string{
+	attrs := map[string]any{
 		"k8s.pod.name":       pod.Name,
 		"k8s.namespace.name": pod.Namespace,
 		"k8s.resource.kind":  "Pod",
@@ -562,7 +564,10 @@ func (m *Mapper) buildPodLifecycleEvent(ctx context.Context, pod *corev1.Pod, ki
 				if cs.State.Terminated.Reason != "" {
 					attrs["k8s.reason"] = cs.State.Terminated.Reason
 				}
-				attrs["k8s.exit_code"] = strconv.Itoa(int(cs.State.Terminated.ExitCode))
+				if cs.Name != "" {
+					attrs["k8s.container.name"] = cs.Name
+				}
+				attrs["k8s.exit_code"] = int(cs.State.Terminated.ExitCode)
 				break
 			}
 		}
@@ -571,7 +576,7 @@ func (m *Mapper) buildPodLifecycleEvent(ctx context.Context, pod *corev1.Pod, ki
 		occurredAt = wireformat.TimeToUnixNano(pod.CreationTimestamp.Time)
 	}
 	if len(identityRestartCounts(pod)) > 0 {
-		attrs["k8s.restart_count"] = strconv.Itoa(maxRestartCount(pod))
+		attrs["k8s.restart_count"] = maxRestartCount(pod)
 	}
 
 	return wireformat.Event{
@@ -638,14 +643,18 @@ func (m *Mapper) FromDeploymentRollout(ctx context.Context, old, n *appsv1.Deplo
 		serviceID = n.Name
 	}
 
-	attrs := map[string]string{
+	attrs := map[string]any{
 		"k8s.deployment.name": n.Name,
 		"k8s.namespace.name":  n.Namespace,
 		"k8s.resource.kind":   "Deployment",
 		"k8s.rollout.status":  status,
 	}
 	if rev, ok := n.Annotations["deployment.kubernetes.io/revision"]; ok {
-		attrs["k8s.rollout.revision"] = rev
+		if revNum, err2 := parseRevision(rev); err2 == nil {
+			attrs["k8s.rollout.revision"] = revNum
+		} else {
+			attrs["k8s.rollout.revision"] = rev
+		}
 	}
 
 	var occurredAt int64

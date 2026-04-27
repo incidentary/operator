@@ -203,8 +203,11 @@ type Event struct {
 	ServiceID string `json:"service_id"`
 
 	// Attributes is the per-kind structured metadata map. OTel semantic
-	// convention keys; string values only (per wire-format-v2.md section 13.1).
-	Attributes map[string]string `json:"attributes,omitempty"`
+	// convention keys; values are strings, numbers, or booleans per
+	// wire-format-v2.md section 13.1. Numeric spec fields (k8s.exit_code,
+	// k8s.restart_count, k8s.hpa.*_replicas, k8s.rollout.revision) must be
+	// Go integer values so they serialize as JSON numbers, not strings.
+	Attributes map[string]any `json:"attributes,omitempty"`
 
 	// Series holds deduplication metadata for K8s events with count > 1.
 	// Nil when the event occurred once.

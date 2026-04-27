@@ -121,10 +121,10 @@ func TestIngestBatchJSON(t *testing.T) {
 				Severity:   wireformat.SeverityError,
 				OccurredAt: 1733103000000000000,
 				ServiceID:  "payment-service",
-				Attributes: map[string]string{
+				Attributes: map[string]any{
 					"k8s.pod.name":  "payment-service-7d9f6b-xkp2m",
 					"k8s.reason":    "BackOff",
-					"k8s.exit_code": "137",
+					"k8s.exit_code": 137,
 				},
 			},
 		},
@@ -269,6 +269,65 @@ func TestResourceRoundtrip(t *testing.T) {
 	}
 	if back.Attributes["k8s.namespace.name"] != "default" {
 		t.Fatalf("round-trip lost k8s.namespace.name: %v", back.Attributes)
+	}
+}
+
+// TestAttributeNumericSerialization verifies that numeric attribute values
+// (k8s.exit_code, k8s.restart_count, k8s.hpa.*_replicas per spec §13) are
+// emitted as JSON numbers, not JSON strings. Compile-time RED if
+// Event.Attributes is map[string]string.
+func TestAttributeNumericSerialization(t *testing.T) {
+	t.Parallel()
+
+	ev := wireformat.Event{
+		ID:         "id-num",
+		Kind:       wireformat.KindK8sOOMKill,
+		Severity:   wireformat.SeverityError,
+		OccurredAt: 1733100600000000000,
+		ServiceID:  "svc",
+		Attributes: map[string]any{
+			"k8s.exit_code":     137,
+			"k8s.restart_count": 5,
+			"k8s.pod.name":      "pod-abc",
+		},
+	}
+
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	attrs, ok := decoded["attributes"].(map[string]any)
+	if !ok {
+		t.Fatalf("attributes is not an object: %T", decoded["attributes"])
+	}
+
+	// exit_code must be a JSON number (float64 after decode), not a string.
+	exitCode, ok := attrs["k8s.exit_code"].(float64)
+	if !ok {
+		t.Fatalf("k8s.exit_code type = %T (%v), want float64 (JSON number)", attrs["k8s.exit_code"], attrs["k8s.exit_code"])
+	}
+	if exitCode != 137 {
+		t.Fatalf("k8s.exit_code = %v, want 137", exitCode)
+	}
+
+	restartCount, ok := attrs["k8s.restart_count"].(float64)
+	if !ok {
+		t.Fatalf("k8s.restart_count type = %T (%v), want float64 (JSON number)", attrs["k8s.restart_count"], attrs["k8s.restart_count"])
+	}
+	if restartCount != 5 {
+		t.Fatalf("k8s.restart_count = %v, want 5", restartCount)
+	}
+
+	// String attribute must still work.
+	podName, ok := attrs["k8s.pod.name"].(string)
+	if !ok || podName != "pod-abc" {
+		t.Fatalf("k8s.pod.name = %v (%T), want string \"pod-abc\"", attrs["k8s.pod.name"], attrs["k8s.pod.name"])
 	}
 }
 

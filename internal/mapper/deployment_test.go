@@ -219,22 +219,22 @@ func TestFromDeploymentDelete_MidRollout(t *testing.T) {
 	}
 }
 
-func TestFromDeploymentDelete_Stable(t *testing.T) {
+func TestFromDeploymentDelete_StableDoesNotFireCancelled(t *testing.T) {
+	// A stable Deployment (Progressing=True, Reason=NewReplicaSetAvailable) that
+	// is intentionally deleted (e.g. kubectl delete deployment) must NOT emit
+	// DEPLOY_CANCELLED. The deployment completed its last rollout successfully;
+	// the deletion is routine cleanup, not a mid-rollout cancellation.
 	d := deploy("5", 3,
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetAvailable"),
 	)
-	// A stable Deployment (NewReplicaSetAvailable) being deleted is just cleanup.
-	// Progressing.Status is still True, so the current implementation still fires
-	// DEPLOY_CANCELLED — we only suppress when Status != True. This is the
-	// conservative behavior: if anything looks like it was mid-rollout, emit.
 	m := newTestMapper(t)
 	_, ok, err := m.FromDeploymentDelete(context.Background(), d)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	// We accept either true or false here because the NewReplicaSetAvailable
-	// reason is ambiguous. The important invariant is: no crash, no error.
-	_ = ok
+	if ok {
+		t.Error("stable deployment deletion should NOT emit DEPLOY_CANCELLED (false positive)")
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -330,6 +330,135 @@ func TestFromDaemonSetChange_Succeeded(t *testing.T) {
 	}
 	if !hasKind(out, wireformat.KindDeploySucceeded) {
 		t.Fatalf("expected DEPLOY_SUCCEEDED, got %+v", kinds(out))
+	}
+}
+
+// -----------------------------------------------------------------------------
+// specReplicas edge cases.
+// -----------------------------------------------------------------------------
+
+func TestSpecReplicas_NilDefaultsToOne(t *testing.T) {
+	if got := specReplicas(nil); got != 1 {
+		t.Errorf("specReplicas(nil) = %d, want 1 (K8s default)", got)
+	}
+}
+
+func TestSpecReplicas_ExplicitValue(t *testing.T) {
+	n := int32(5)
+	if got := specReplicas(&n); got != 5 {
+		t.Errorf("specReplicas(&5) = %d, want 5", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// FromDeploymentChange with nil Spec.Replicas (K8s default of 1).
+// -----------------------------------------------------------------------------
+
+func TestFromDeploymentChange_NilReplicasSucceeded(t *testing.T) {
+	// A Deployment with no explicit Spec.Replicas (nil → K8s default 1) that
+	// just completed its rollout must still emit DEPLOY_SUCCEEDED.
+	old := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "web",
+			Namespace:         "prod",
+			Annotations:       map[string]string{"deployment.kubernetes.io/revision": "2"},
+			CreationTimestamp: metav1.Now(),
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: nil}, // ← nil, defaults to 1
+		Status: appsv1.DeploymentStatus{
+			UpdatedReplicas: 0,
+			ReadyReplicas:   0,
+			Conditions: []appsv1.DeploymentCondition{
+				cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"),
+				cond(appsv1.DeploymentAvailable, corev1.ConditionFalse, ""),
+			},
+		},
+	}
+	new := old.DeepCopy()
+	new.Status.UpdatedReplicas = 1
+	new.Status.ReadyReplicas = 1
+	new.Status.Conditions = []appsv1.DeploymentCondition{
+		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, reasonNewReplicaSetAvailable),
+		cond(appsv1.DeploymentAvailable, corev1.ConditionTrue, ""),
+	}
+
+	m := newTestMapper(t)
+	out, err := m.FromDeploymentChange(context.Background(), old, new)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !hasKind(out, wireformat.KindDeploySucceeded) {
+		t.Errorf("expected DEPLOY_SUCCEEDED for nil-replicas deployment, got %+v", kinds(out))
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Dispatch — unknown type and delete path.
+// -----------------------------------------------------------------------------
+
+func TestDispatch_UnknownTypeReturnsNil(t *testing.T) {
+	// Service is in WatchSet but has no mapper. Dispatch must return (nil, nil).
+	m := newTestMapper(t)
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "prod"}}
+	out, err := m.Dispatch(context.Background(), nil, svc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("expected no events for unknown type, got %d", len(out))
+	}
+}
+
+func TestDispatch_DeleteNonDeploymentReturnsNil(t *testing.T) {
+	// Deleting a Pod (or any non-Deployment) must return (nil, nil).
+	m := newTestMapper(t)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "prod"}}
+	out, err := m.Dispatch(context.Background(), pod, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("expected no events for pod delete, got %d", len(out))
+	}
+}
+
+// -----------------------------------------------------------------------------
+// StatefulSet — OccurredAt timestamp documents current behavior.
+// -----------------------------------------------------------------------------
+
+func TestFromStatefulSetChange_OccurredAtIsCreationTimestamp(t *testing.T) {
+	// StatefulSet DEPLOY_STARTED events use CreationTimestamp for OccurredAt
+	// because the StatefulSet controller does not expose condition transition
+	// times with the precision that Deployment conditions do.
+	// This test documents the current behavior so any future change to use
+	// a more precise timestamp is a deliberate, tested decision.
+	creation := metav1.Time{Time: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)}
+	old := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "db",
+			Namespace:         "prod",
+			CreationTimestamp: creation,
+		},
+		Spec: appsv1.StatefulSetSpec{Replicas: ptrInt32(3)},
+		Status: appsv1.StatefulSetStatus{
+			UpdateRevision:  "db-v1",
+			CurrentRevision: "db-v1",
+		},
+	}
+	n := old.DeepCopy()
+	n.Status.UpdateRevision = "db-v2"
+
+	m := newTestMapper(t)
+	out, err := m.FromStatefulSetChange(context.Background(), old, n)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("expected DEPLOY_STARTED event")
+	}
+	wantAt := wireformat.TimeToUnixNano(creation.Time)
+	if out[0].OccurredAt != wantAt {
+		t.Errorf("OccurredAt = %d, want CreationTimestamp (%d)", out[0].OccurredAt, wantAt)
 	}
 }
 

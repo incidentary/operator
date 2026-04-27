@@ -23,6 +23,8 @@ import (
 	"github.com/incidentary/operator/internal/wireformat"
 )
 
+const contentTypeJSON = "application/json"
+
 func testBatch() *wireformat.IngestBatch {
 	return &wireformat.IngestBatch{
 		SpecVersion: wireformat.SpecVersion,
@@ -71,7 +73,7 @@ func TestFlush_Success(t *testing.T) {
 	if gotVersion != "1.2.3" {
 		t.Errorf("agent version header = %q", gotVersion)
 	}
-	if gotContentType != "application/json" {
+	if gotContentType != contentTypeJSON {
 		t.Errorf("content-type = %q", gotContentType)
 	}
 }

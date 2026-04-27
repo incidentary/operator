@@ -43,7 +43,7 @@ func TestNewIDDoesNotCollideAcrossManySamples(t *testing.T) {
 	// deduplication-keyed event ids.
 	const n = 4096
 	seen := make(map[string]struct{}, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := NewID()
 		if _, dup := seen[id]; dup {
 			t.Fatalf("duplicate id at iteration %d: %q", i, id)
@@ -61,7 +61,7 @@ func TestNewIDIsNotSeriallyOrdered(t *testing.T) {
 	// We sample 500 pairs; a<b and a>b should each land in roughly
 	// [150, 350] — well inside a 12σ envelope around 250/500.
 	var lt, gt int
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		a := NewID()
 		b := NewID()
 		switch {

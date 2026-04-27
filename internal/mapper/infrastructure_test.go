@@ -301,6 +301,37 @@ func TestFromHPAScale_NoChange(t *testing.T) {
 	}
 }
 
+func TestFromHPAScale_NilLastScaleTime(t *testing.T) {
+	// An HPA whose LastScaleTime is nil (just created or initial scale) must
+	// not panic. OccurredAt falls back to zero (epoch), which the backend
+	// treats as "unknown".
+	old := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-hpa", Namespace: "prod"},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Name: "app"},
+			MaxReplicas:    10,
+		},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			CurrentReplicas: 2,
+			LastScaleTime:   nil, // explicitly nil
+		},
+	}
+	newHPA := old.DeepCopy()
+	newHPA.Status.CurrentReplicas = 4
+
+	m := newTestMapper(t)
+	ev, ok, err := m.FromHPAScale(context.Background(), old, newHPA)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected event on replica change")
+	}
+	if ev.OccurredAt != 0 {
+		t.Errorf("OccurredAt = %d, want 0 when LastScaleTime is nil", ev.OccurredAt)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // FromPodStatusChange.
 // -----------------------------------------------------------------------------
@@ -351,8 +382,8 @@ func TestFromPodStatusChange_Failed(t *testing.T) {
 	if len(out) != 1 || out[0].Kind != wireformat.KindK8sPodTerminated {
 		t.Fatalf("got %+v, want 1 K8S_POD_TERMINATED", out)
 	}
-	if out[0].Attributes["k8s.exit_code"] != "1" {
-		t.Errorf("exit_code attr = %q, want 1", out[0].Attributes["k8s.exit_code"])
+	if out[0].Attributes["k8s.exit_code"] != 1 {
+		t.Errorf("exit_code attr = %v, want 1", out[0].Attributes["k8s.exit_code"])
 	}
 }
 
@@ -390,8 +421,8 @@ func TestFromPodStatusChange_OOMKilled(t *testing.T) {
 	if out[0].ServiceID != "oom-victim" {
 		t.Errorf("ServiceID = %q, want %q", out[0].ServiceID, "oom-victim")
 	}
-	if out[0].Attributes["k8s.exit_code"] != "137" {
-		t.Errorf("exit_code attr = %q, want 137", out[0].Attributes["k8s.exit_code"])
+	if out[0].Attributes["k8s.exit_code"] != 137 {
+		t.Errorf("exit_code attr = %v, want 137", out[0].Attributes["k8s.exit_code"])
 	}
 	if out[0].Attributes["k8s.reason"] != containerReasonOOMKilled {
 		t.Errorf("k8s.reason attr = %q, want %q", out[0].Attributes["k8s.reason"], containerReasonOOMKilled)
