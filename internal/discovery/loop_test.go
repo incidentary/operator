@@ -198,3 +198,163 @@ func TestLoop_NeedLeaderElection(t *testing.T) {
 		t.Error("NeedLeaderElection should be true")
 	}
 }
+
+// -----------------------------------------------------------------------------
+// StatefulSet and DaemonSet collection
+// -----------------------------------------------------------------------------
+
+func mkStatefulSet(name, ns string, image string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: appsv1.StatefulSetSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "main", Image: image}},
+				},
+			},
+		},
+	}
+}
+
+func mkDaemonSet(name, ns string, image string, labels map[string]string) *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+		Spec: appsv1.DaemonSetSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "main", Image: image}},
+				},
+			},
+		},
+	}
+}
+
+func TestRunOnce_IncludesStatefulSetAndDaemonSet(t *testing.T) {
+	s := newScheme(t)
+	dep := mkDeployment("web", "prod", 2, nil)
+	sts := mkStatefulSet("db", "prod", "postgres:15")
+	ds := mkDaemonSet("fluentd", "prod", "fluent/fluentd:v1", nil)
+	// kube-proxy should be filtered by isSystemWorkload (k8s-app label).
+	sysDaemon := mkDaemonSet("kube-proxy", "kube-system", "kube-proxy:v1",
+		map[string]string{"k8s-app": "kube-proxy"})
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, sts, ds, sysDaemon).Build()
+	topo := &fakeTopology{}
+	l := NewLoop(c, identity.NewResolver(c), topo, testr.New(t), Options{
+		Interval: time.Hour,
+	})
+
+	if err := l.runOnce(context.Background()); err != nil {
+		t.Fatalf("runOnce error: %v", err)
+	}
+
+	if len(topo.reports) != 1 {
+		t.Fatalf("reports = %d, want 1", len(topo.reports))
+	}
+	workloads := topo.reports[0].Workloads
+
+	kinds := map[string]string{}
+	for _, w := range workloads {
+		kinds[w.ServiceID] = w.Kind
+	}
+
+	if kinds["web"] != "Deployment" {
+		t.Errorf("web kind = %q, want Deployment", kinds["web"])
+	}
+	if kinds["db"] != "StatefulSet" {
+		t.Errorf("db kind = %q, want StatefulSet", kinds["db"])
+	}
+	if kinds["fluentd"] != "DaemonSet" {
+		t.Errorf("fluentd kind = %q, want DaemonSet", kinds["fluentd"])
+	}
+	if _, found := kinds["kube-proxy"]; found {
+		t.Errorf("system workload kube-proxy should not appear in report")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// isSystemWorkload
+// -----------------------------------------------------------------------------
+
+func TestIsSystemWorkload(t *testing.T) {
+	cases := []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{"nil labels", nil, false},
+		{"no relevant labels", map[string]string{"app": "web"}, false},
+		{"k8s-app set", map[string]string{"k8s-app": "kube-proxy"}, true},
+		{"controller-manager component", map[string]string{"app.kubernetes.io/component": "controller-manager"}, true},
+		{"other component", map[string]string{"app.kubernetes.io/component": "scheduler"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSystemWorkload(tc.labels); got != tc.want {
+				t.Errorf("isSystemWorkload(%v) = %v, want %v", tc.labels, got, tc.want)
+			}
+		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// primaryImage
+// -----------------------------------------------------------------------------
+
+func TestPrimaryImage_EmptyContainers(t *testing.T) {
+	if got := primaryImage(nil); got != "" {
+		t.Errorf("primaryImage(nil) = %q, want empty", got)
+	}
+	if got := primaryImage([]corev1.Container{}); got != "" {
+		t.Errorf("primaryImage([]) = %q, want empty", got)
+	}
+}
+
+func TestPrimaryImage_FirstContainer(t *testing.T) {
+	containers := []corev1.Container{
+		{Image: "main-image:v1"},
+		{Image: "sidecar:v2"},
+	}
+	if got := primaryImage(containers); got != "main-image:v1" {
+		t.Errorf("primaryImage = %q, want main-image:v1", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// fallbackName / sourceString
+// -----------------------------------------------------------------------------
+
+func TestFallbackName_PreferredUsedWhenSet(t *testing.T) {
+	if got := fallbackName("preferred", "fallback"); got != "preferred" {
+		t.Errorf("fallbackName = %q, want preferred", got)
+	}
+}
+
+func TestFallbackName_FallbackUsedWhenPreferredEmpty(t *testing.T) {
+	if got := fallbackName("", "fallback"); got != "fallback" {
+		t.Errorf("fallbackName = %q, want fallback", got)
+	}
+}
+
+func TestSourceString_EmptyDefaultsToWorkloadName(t *testing.T) {
+	if got := sourceString(""); got != "workload_name" {
+		t.Errorf("sourceString(\"\") = %q, want workload_name", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// deref
+// -----------------------------------------------------------------------------
+
+func TestDeref_Nil(t *testing.T) {
+	if got := deref(nil); got != 0 {
+		t.Errorf("deref(nil) = %d, want 0", got)
+	}
+}
+
+func TestDeref_NonNil(t *testing.T) {
+	n := int32(5)
+	if got := deref(&n); got != 5 {
+		t.Errorf("deref(&5) = %d, want 5", got)
+	}
+}
