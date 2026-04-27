@@ -302,9 +302,9 @@ func TestFromHPAScale_NoChange(t *testing.T) {
 }
 
 func TestFromHPAScale_NilLastScaleTime(t *testing.T) {
-	// An HPA whose LastScaleTime is nil (just created or initial scale) must
-	// not panic. OccurredAt falls back to zero (epoch), which the backend
-	// treats as "unknown".
+	// An HPA whose LastScaleTime is nil must still produce occurred_at > 0.
+	// §7.1: the server drops events with occurred_at ≤ 0 (INVALID_TIMESTAMP).
+	// When LastScaleTime is unavailable, the mapper falls back to time.Now().
 	old := &autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-hpa", Namespace: "prod"},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
@@ -327,8 +327,9 @@ func TestFromHPAScale_NilLastScaleTime(t *testing.T) {
 	if !ok {
 		t.Fatal("expected event on replica change")
 	}
-	if ev.OccurredAt != 0 {
-		t.Errorf("OccurredAt = %d, want 0 when LastScaleTime is nil", ev.OccurredAt)
+	// occurred_at must be > 0 per §7.1 to avoid INVALID_TIMESTAMP drop.
+	if ev.OccurredAt <= 0 {
+		t.Errorf("OccurredAt = %d, want > 0 (§7.1)", ev.OccurredAt)
 	}
 }
 

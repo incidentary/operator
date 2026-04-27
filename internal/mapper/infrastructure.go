@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -378,6 +379,11 @@ func (m *Mapper) nodePressureEvent(node *corev1.Node, reason string, cond *corev
 	if occurredAt == 0 {
 		occurredAt = wireformat.TimeToUnixNano(cond.LastHeartbeatTime.Time)
 	}
+	if occurredAt == 0 {
+		// §7.1: occurred_at must be > 0 — fall back to now when both condition
+		// timestamps are unset (e.g. freshly admitted node conditions).
+		occurredAt = time.Now().UnixNano()
+	}
 
 	return wireformat.Event{
 		ID:         ids.NewID(),
@@ -442,7 +448,8 @@ func (m *Mapper) FromHPAScale(_ context.Context, old, n *autoscalingv2.Horizonta
 	}
 
 	// LastScaleTime is *metav1.Time and may be nil when the HPA has never fired.
-	var occurredAt int64
+	// §7.1: occurred_at must be > 0; fall back to now when the timestamp is absent.
+	occurredAt := time.Now().UnixNano()
 	if n.Status.LastScaleTime != nil {
 		occurredAt = wireformat.TimeToUnixNano(n.Status.LastScaleTime.Time)
 	}
