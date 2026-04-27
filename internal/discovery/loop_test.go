@@ -358,3 +358,58 @@ func TestDeref_NonNil(t *testing.T) {
 		t.Errorf("deref(&5) = %d, want 5", got)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// NewLoop nil-guard panics
+// -----------------------------------------------------------------------------
+
+func TestNewLoop_NilClientPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil client")
+		}
+	}()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	_ = NewLoop(nil, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
+}
+
+func TestNewLoop_NilResolverPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil resolver")
+		}
+	}()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	_ = NewLoop(c, nil, &fakeTopology{}, testr.New(t), Options{})
+}
+
+func TestNewLoop_NilTopologyPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil topology client")
+		}
+	}()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	_ = NewLoop(c, identity.NewResolver(c), nil, testr.New(t), Options{})
+}
+
+// -----------------------------------------------------------------------------
+// conditionsFromDeployment — loop body (non-empty slice)
+// -----------------------------------------------------------------------------
+
+func TestConditionsFromDeployment_NonEmpty(t *testing.T) {
+	conds := []appsv1.DeploymentCondition{
+		{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+		{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse},
+	}
+	out := conditionsFromDeployment(conds)
+	if len(out) != 2 {
+		t.Fatalf("len = %d, want 2", len(out))
+	}
+	if out[0].Type != string(appsv1.DeploymentAvailable) {
+		t.Errorf("out[0].Type = %q, want %q", out[0].Type, appsv1.DeploymentAvailable)
+	}
+	if out[1].Status != string(corev1.ConditionFalse) {
+		t.Errorf("out[1].Status = %q, want %q", out[1].Status, corev1.ConditionFalse)
+	}
+}

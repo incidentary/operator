@@ -245,3 +245,42 @@ func TestLevenshtein(t *testing.T) {
 		}
 	}
 }
+
+// -----------------------------------------------------------------------------
+// NewReconciler nil-guard panics and default interval.
+// -----------------------------------------------------------------------------
+
+func TestNewReconciler_NilClientPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil client")
+		}
+	}()
+	_ = NewReconciler(nil, nil, &fakeServices{}, testr.New(t), time.Second)
+}
+
+func TestNewReconciler_NilServicesPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil services client")
+		}
+	}()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	_ = NewReconciler(c, nil, nil, testr.New(t), time.Second)
+}
+
+func TestNewReconciler_ZeroIntervalDefaulted(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	r := NewReconciler(c, nil, &fakeServices{}, testr.New(t), 0)
+	if r.interval != DefaultInterval {
+		t.Errorf("interval = %v, want DefaultInterval %v", r.interval, DefaultInterval)
+	}
+}
+
+func TestReconciler_NeedLeaderElection(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	r := NewReconciler(c, nil, &fakeServices{}, testr.New(t), time.Second)
+	if !r.NeedLeaderElection() {
+		t.Error("NeedLeaderElection should be true")
+	}
+}
