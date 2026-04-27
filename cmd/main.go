@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -74,7 +75,7 @@ func init() {
 // batcher. Unknown object types produce no events (the mapper returns an
 // empty slice).
 type pipelineHandler struct {
-	mapper  *mapper.Mapper
+	mapper  mapper.Dispatcher
 	filter  filter.Filter
 	batcher *batch.Batcher
 	log     logr.Logger
@@ -93,6 +94,11 @@ func (h *pipelineHandler) OnDelete(ctx context.Context, obj client.Object) {
 }
 
 func (h *pipelineHandler) emit(ctx context.Context, oldObj, newObj client.Object) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.log.Error(fmt.Errorf("%v", r), "mapper dispatch panicked; dropping event")
+		}
+	}()
 	events, err := h.mapper.Dispatch(ctx, oldObj, newObj)
 	if err != nil {
 		h.log.Error(err, "mapper dispatch failed")

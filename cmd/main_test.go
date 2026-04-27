@@ -21,6 +21,7 @@ import (
 	eventsv1 "k8s.io/api/events/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -244,4 +245,40 @@ func TestPipelineHandler_EmitNilNewObjHandledGracefully(t *testing.T) {
 	}
 	// No panic expected even with a nil newObj.
 	h.emit(context.Background(), dep, nil)
+}
+
+// ----------------------------------------------------------------------------
+// panic recovery
+// ----------------------------------------------------------------------------
+
+// panicingMapper is a mapper.Dispatcher that always panics in Dispatch.
+type panicingMapper struct{}
+
+func (p *panicingMapper) Dispatch(_ context.Context, _, _ client.Object) ([]wireformat.Event, error) {
+	panic("intentional panic from test")
+}
+
+func TestPipelineHandler_EmitRecoversPanic(t *testing.T) {
+	// A panicking mapper must not kill the goroutine — emit() must recover and
+	// log, never propagating the panic to the caller.
+	rec := &recordingClient{}
+	resource := func() wireformat.Resource { return wireformat.Resource{Attributes: map[string]string{}} }
+	agent := func() wireformat.Agent { return wireformat.Agent{Type: wireformat.AgentTypeK8sOperator} }
+	b := batch.NewBatcher(rec, resource, agent, log.Log.WithName("test"))
+
+	h := &pipelineHandler{
+		mapper:  &panicingMapper{},
+		filter:  filter.NewFromString("info"),
+		batcher: b,
+		log:     log.Log.WithName("test"),
+	}
+
+	// Must not panic — emit() should recover and log.
+	h.emit(context.Background(), nil, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "prod"},
+	})
+	// Buffer must be empty (panic was recovered, no events enqueued).
+	if b.BufferSize() != 0 {
+		t.Errorf("expected 0 events after panic recovery, got %d", b.BufferSize())
+	}
 }
