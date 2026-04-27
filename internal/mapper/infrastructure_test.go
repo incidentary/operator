@@ -737,3 +737,66 @@ func TestFromDeploymentRollout_ProgressingToFailedEmitsEvent(t *testing.T) {
 		t.Errorf("rollout.status = %v, want failed", evts[0].Attributes["k8s.rollout.status"])
 	}
 }
+
+// -----------------------------------------------------------------------------
+// §7.1 occurred_at > 0 fallback: time.Now() when all timestamps are zero.
+// -----------------------------------------------------------------------------
+
+func TestFromK8sEvent_BothTimestampsZeroFallsBackToNow(t *testing.T) {
+	// Neither EventTime nor DeprecatedFirstTimestamp is set; the mapper must
+	// fall back to time.Now() to satisfy §7.1 (occurred_at > 0).
+	ev := &eventsv1.Event{
+		Reason:    "OOMKilling",
+		Regarding: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "p"},
+		// EventTime and DeprecatedFirstTimestamp intentionally zero
+	}
+	m := newTestMapper(t)
+	out, ok, err := m.FromK8sEvent(context.Background(), ev)
+	if err != nil || !ok {
+		t.Fatalf("FromK8sEvent: ok=%v err=%v", ok, err)
+	}
+	if out.OccurredAt <= 0 {
+		t.Errorf("OccurredAt = %d, want > 0 (§7.1)", out.OccurredAt)
+	}
+}
+
+func TestFromCoreEvent_BothTimestampsZeroFallsBackToNow(t *testing.T) {
+	// Neither FirstTimestamp nor EventTime is set; the mapper must fall back to
+	// time.Now() to satisfy §7.1 (occurred_at > 0).
+	ev := &corev1.Event{
+		Reason:         "BackOff",
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "p"},
+		// FirstTimestamp and EventTime intentionally zero
+	}
+	m := newTestMapper(t)
+	out, ok, err := m.FromCoreEvent(context.Background(), ev)
+	if err != nil || !ok {
+		t.Fatalf("FromCoreEvent: ok=%v err=%v", ok, err)
+	}
+	if out.OccurredAt <= 0 {
+		t.Errorf("OccurredAt = %d, want > 0 (§7.1)", out.OccurredAt)
+	}
+}
+
+func TestFromPodStatusChange_AllTimestampsZeroFallsBackToNow(t *testing.T) {
+	// A pod transition where StartTime, ContainerStatuses, and CreationTimestamp
+	// are all zero: buildPodLifecycleEvent must fall back to time.Now().
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "ghost-pod", Namespace: "prod"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			// StartTime intentionally nil
+		},
+	}
+	m := newTestMapper(t, pod)
+	out, err := m.FromPodStatusChange(context.Background(), nil, pod)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d events, want 1", len(out))
+	}
+	if out[0].OccurredAt <= 0 {
+		t.Errorf("OccurredAt = %d, want > 0 (§7.1)", out[0].OccurredAt)
+	}
+}

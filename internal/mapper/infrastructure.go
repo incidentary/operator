@@ -171,6 +171,10 @@ func (m *Mapper) FromK8sEvent(ctx context.Context, ev *eventsv1.Event) (wireform
 	if ev.EventTime.IsZero() {
 		occurredAt = wireformat.TimeToUnixNano(ev.DeprecatedFirstTimestamp.Time)
 	}
+	if occurredAt <= 0 {
+		// §7.1: occurred_at must be > 0 — fall back to now when all timestamps absent.
+		occurredAt = time.Now().UnixNano()
+	}
 
 	out := wireformat.Event{
 		ID:         ids.NewID(),
@@ -241,6 +245,10 @@ func (m *Mapper) FromCoreEvent(ctx context.Context, ev *corev1.Event) (wireforma
 	occurredAt := wireformat.TimeToUnixNano(ev.FirstTimestamp.Time)
 	if occurredAt == 0 {
 		occurredAt = ev.EventTime.UnixNano()
+	}
+	if occurredAt <= 0 {
+		// §7.1: occurred_at must be > 0 — fall back to now when all timestamps absent.
+		occurredAt = time.Now().UnixNano()
 	}
 
 	out := wireformat.Event{
@@ -581,6 +589,10 @@ func (m *Mapper) buildPodLifecycleEvent(ctx context.Context, pod *corev1.Pod, ki
 	}
 	if occurredAt == 0 {
 		occurredAt = wireformat.TimeToUnixNano(pod.CreationTimestamp.Time)
+	}
+	if occurredAt == 0 {
+		// §7.1: occurred_at must be > 0 — fall back to now when all pod timestamps absent.
+		occurredAt = time.Now().UnixNano()
 	}
 	if len(identityRestartCounts(pod)) > 0 {
 		attrs["k8s.restart_count"] = maxRestartCount(pod)
