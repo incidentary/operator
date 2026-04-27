@@ -12,6 +12,7 @@ package mapper
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/incidentary/operator/internal/identity"
 	"github.com/incidentary/operator/internal/wireformat"
 )
 
@@ -493,6 +495,64 @@ func TestParseRevision_InvalidReturnsError(t *testing.T) {
 	_, err := parseRevision("not-a-number")
 	if err == nil {
 		t.Error("expected error for non-numeric revision string")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// FromDeploymentDelete — additional branches.
+// -----------------------------------------------------------------------------
+
+func TestFromDeploymentDelete_NilIsNoop(t *testing.T) {
+	m := newTestMapper(t)
+	_, ok, err := m.FromDeploymentDelete(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected ok=false for nil deployment")
+	}
+}
+
+func TestFromDeploymentDelete_ResolverErrorPropagates(t *testing.T) {
+	m := newErrorMapper(t, errors.New("etcd unavailable"))
+	d := deploy("5", 3, cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"))
+	_, _, err := m.FromDeploymentDelete(context.Background(), d)
+	if err == nil {
+		t.Error("expected error when resolver fails, got nil")
+	}
+}
+
+// TestFromDeploymentDelete_ServiceIDFromAnnotation covers the
+// resolveWorkloadServiceID branch where res.ServiceID != "" (annotation wins).
+func TestFromDeploymentDelete_ServiceIDFromAnnotation(t *testing.T) {
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "web",
+			Namespace: "prod",
+			Annotations: map[string]string{
+				identity.ServiceIDAnnotation:              "my-service",
+				"deployment.kubernetes.io/revision":       "5",
+			},
+			CreationTimestamp: metav1.Time{Time: time.Now().Add(-time.Hour)},
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: ptrInt32(3)},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"),
+			},
+		},
+	}
+	m := newTestMapper(t, dep)
+
+	ev, ok, err := m.FromDeploymentDelete(context.Background(), dep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected DEPLOY_CANCELLED event")
+	}
+	if ev.ServiceID != "my-service" {
+		t.Errorf("ServiceID = %q; want %q", ev.ServiceID, "my-service")
 	}
 }
 
