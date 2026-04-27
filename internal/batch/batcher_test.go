@@ -218,6 +218,46 @@ func TestBatcher_NilClientPanics(t *testing.T) {
 	_ = NewBatcher(nil, testResource, testAgent, testr.New(t))
 }
 
+func TestBatcher_FlushedAtIsPositive(t *testing.T) {
+	// §4.1 requires flushed_at > 0 — a zero value is a spec violation that
+	// causes the server to reject the batch with INVALID_TIMESTAMP.
+	var captured *wireformat.IngestBatch
+	c := &batchCapturingClient{}
+	log := testr.New(t)
+	b := NewBatcher(c, testResource, testAgent, log,
+		WithFlushInterval(20*time.Millisecond),
+	)
+	defer startBatcher(t, b)()
+
+	b.Enqueue(event("flushed-at-1"))
+	waitFor(t, func() bool {
+		captured = c.last()
+		return captured != nil
+	})
+	if captured.FlushedAt <= 0 {
+		t.Errorf("flushed_at = %d, want > 0 (wire format v2 §4.1)", captured.FlushedAt)
+	}
+}
+
+// batchCapturingClient records the last full IngestBatch flushed.
+type batchCapturingClient struct {
+	mu     sync.Mutex
+	_batch *wireformat.IngestBatch
+}
+
+func (c *batchCapturingClient) Flush(_ context.Context, b *wireformat.IngestBatch) (client.FlushResult, error) {
+	c.mu.Lock()
+	c._batch = b
+	c.mu.Unlock()
+	return client.FlushResult{IngestResponse: client.IngestResponse{Accepted: len(b.Events)}}, nil
+}
+
+func (c *batchCapturingClient) last() *wireformat.IngestBatch {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c._batch
+}
+
 // waitFor polls the predicate until it returns true or the timeout fires.
 func waitFor(t *testing.T, check func() bool) {
 	t.Helper()

@@ -222,6 +222,7 @@ func (b *Batcher) flushNow(ctx context.Context) error {
 		Resource:    b.resource(),
 		Agent:       b.agent(),
 		CaptureMode: wireformat.CaptureModeSkeleton,
+		FlushedAt:   time.Now().UnixNano(),
 		Events:      events,
 	}
 
