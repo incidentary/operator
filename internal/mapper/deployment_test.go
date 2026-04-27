@@ -463,6 +463,40 @@ func TestFromStatefulSetChange_OccurredAtIsCreationTimestamp(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// revisionAttr / parseRevision
+// -----------------------------------------------------------------------------
+
+func TestRevisionAttr_NumericStringReturnsInt(t *testing.T) {
+	got := revisionAttr("42")
+	if got != 42 {
+		t.Errorf("revisionAttr(\"42\") = %v (%T), want 42 (int)", got, got)
+	}
+}
+
+func TestRevisionAttr_NonNumericStringReturnsSameString(t *testing.T) {
+	// Non-parseable revision strings (e.g. git SHAs) must pass through as-is
+	// so no revision information is lost.
+	got := revisionAttr("abc-123")
+	if got != "abc-123" {
+		t.Errorf("revisionAttr(\"abc-123\") = %v (%T), want \"abc-123\" (string)", got, got)
+	}
+}
+
+func TestParseRevision_ValidInt(t *testing.T) {
+	n, err := parseRevision("7")
+	if err != nil || n != 7 {
+		t.Errorf("parseRevision(\"7\") = %d, %v; want 7, nil", n, err)
+	}
+}
+
+func TestParseRevision_InvalidReturnsError(t *testing.T) {
+	_, err := parseRevision("not-a-number")
+	if err == nil {
+		t.Error("expected error for non-numeric revision string")
+	}
+}
+
+// -----------------------------------------------------------------------------
 // Helpers.
 // -----------------------------------------------------------------------------
 

@@ -343,3 +343,24 @@ func TestResourceMarshalNilAttributes(t *testing.T) {
 		t.Fatalf("nil Attributes should marshal to {}, got %s", raw)
 	}
 }
+
+func TestResourceUnmarshalJSONNull(t *testing.T) {
+	t.Parallel()
+	// JSON null should unmarshal to an empty (not nil) Attributes map.
+	var r wireformat.Resource
+	if err := json.Unmarshal([]byte("null"), &r); err != nil {
+		t.Fatalf("UnmarshalJSON(null): %v", err)
+	}
+	if r.Attributes == nil {
+		t.Error("Attributes should be non-nil after null unmarshal")
+	}
+}
+
+func TestResourceUnmarshalJSONInvalid(t *testing.T) {
+	t.Parallel()
+	// Invalid JSON must propagate the error.
+	var r wireformat.Resource
+	if err := json.Unmarshal([]byte("{bad json}"), &r); err == nil {
+		t.Error("expected error for invalid JSON, got nil")
+	}
+}
