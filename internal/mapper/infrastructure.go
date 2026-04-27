@@ -160,7 +160,7 @@ func (m *Mapper) FromK8sEvent(ctx context.Context, ev *eventsv1.Event) (wireform
 	}
 	setPodAttrs(attrs, ev.Regarding)
 	if ev.Note != "" {
-		attrs["k8s.message"] = truncate(ev.Note, 1024)
+		attrs["k8s.message"] = truncate(ev.Note, 2048)
 	}
 	if ev.Action != "" {
 		attrs["k8s.action"] = ev.Action
@@ -232,7 +232,7 @@ func (m *Mapper) FromCoreEvent(ctx context.Context, ev *corev1.Event) (wireforma
 	}
 	setPodAttrs(attrs, ev.InvolvedObject)
 	if ev.Message != "" {
-		attrs["k8s.message"] = truncate(ev.Message, 1024)
+		attrs["k8s.message"] = truncate(ev.Message, 2048)
 	}
 	if ev.Source.Component != "" {
 		attrs["k8s.source.component"] = ev.Source.Component
@@ -380,7 +380,7 @@ func (m *Mapper) nodePressureEvent(node *corev1.Node, reason string, cond *corev
 		attrs["k8s.condition.reason"] = cond.Reason
 	}
 	if cond.Message != "" {
-		attrs["k8s.message"] = truncate(cond.Message, 1024)
+		attrs["k8s.message"] = truncate(cond.Message, 2048)
 	}
 
 	occurredAt := wireformat.TimeToUnixNano(cond.LastTransitionTime.Time)

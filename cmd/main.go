@@ -199,6 +199,14 @@ func warnIfMisconfigured(apiKey, workspaceID string) bool {
 	return apiKey != "" && workspaceID == ""
 }
 
+// warnIfClusterNameUnset returns true when the cluster name has not been
+// explicitly configured. §5.1 of wire format v2 requires k8s.cluster.name
+// for k8s_operator agents; sending the placeholder "unknown" is technically
+// compliant but makes cluster-level correlation meaningless in the backend.
+func warnIfClusterNameUnset(clusterName string) bool {
+	return clusterName == "" || clusterName == "unknown"
+}
+
 // leaderMetricRunnable sets incidentary_operator_leader_is_leader to 1 when
 // this instance becomes the leader and back to 0 on shutdown. It implements
 // LeaderElectionRunnable so it only runs on the elected leader.
@@ -371,6 +379,12 @@ func main() {
 				"the server will reject every batch with WORKSPACE_MISMATCH (422). "+
 				"Set INCIDENTARY_WORKSPACE_ID to the workspace that owns the API key.")
 	}
+	clusterName := getEnvOrDefault("K8S_CLUSTER_NAME", "unknown")
+	if warnIfClusterNameUnset(clusterName) {
+		setupLog.Info("K8S_CLUSTER_NAME is not set; resource.k8s.cluster.name will be \"unknown\". " +
+			"§5.1 of wire format v2 requires this field for k8s_operator agents — set it to the " +
+			"actual cluster name for accurate event correlation.")
+	}
 
 	var ingest ingestclient.IngestClient
 	if apiKey != "" {
@@ -380,12 +394,13 @@ func main() {
 	}
 
 	resource := func() wireformat.Resource {
-		return wireformat.Resource{
-			Attributes: map[string]string{
-				"k8s.cluster.name":   getEnvOrDefault("K8S_CLUSTER_NAME", "unknown"),
-				"k8s.namespace.name": getEnvOrDefault("K8S_NAMESPACE_NAME", ""),
-			},
+		attrs := map[string]string{
+			"k8s.cluster.name": clusterName,
 		}
+		if ns := getEnvOrDefault("K8S_NAMESPACE_NAME", ""); ns != "" {
+			attrs["k8s.namespace.name"] = ns
+		}
+		return wireformat.Resource{Attributes: attrs}
 	}
 	agent := func() wireformat.Agent {
 		return wireformat.Agent{
@@ -438,7 +453,7 @@ func main() {
 		topologyClient,
 		ctrl.Log.WithName("discovery"),
 		discovery.Options{
-			ClusterName: getEnvOrDefault("K8S_CLUSTER_NAME", "unknown"),
+			ClusterName: clusterName,
 			Interval:    reconciliationInterval,
 		},
 	)

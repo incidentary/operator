@@ -38,10 +38,19 @@ import (
 	"github.com/incidentary/operator/internal/wireformat"
 )
 
+// Dispatcher is the interface consumed by the event pipeline. It lets callers
+// (and tests) decouple from the concrete Mapper implementation.
+type Dispatcher interface {
+	Dispatch(ctx context.Context, oldObj, newObj client.Object) ([]wireformat.Event, error)
+}
+
 // Mapper translates K8s objects into wire format v2 events.
 type Mapper struct {
 	Resolver *identity.Resolver
 }
+
+// Compile-time assertion: *Mapper satisfies Dispatcher.
+var _ Dispatcher = (*Mapper)(nil)
 
 // NewMapper constructs a Mapper backed by the provided identity resolver.
 func NewMapper(resolver *identity.Resolver) *Mapper {

@@ -274,6 +274,32 @@ func TestWarnIfMisconfigured_BothSet(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
+// warnIfClusterNameUnset
+// ----------------------------------------------------------------------------
+
+func TestWarnIfClusterNameUnset_DefaultValueTriggersWarning(t *testing.T) {
+	// §5.1: k8s.cluster.name is Required for k8s_operator agents.
+	// When it falls back to "unknown", the backend cannot correlate events
+	// to a specific cluster; warnIfClusterNameUnset must return true.
+	if !warnIfClusterNameUnset("unknown") {
+		t.Error("expected warnIfClusterNameUnset(\"unknown\") to return true")
+	}
+}
+
+func TestWarnIfClusterNameUnset_EmptyTriggersWarning(t *testing.T) {
+	if !warnIfClusterNameUnset("") {
+		t.Error("expected warnIfClusterNameUnset(\"\") to return true")
+	}
+}
+
+func TestWarnIfClusterNameUnset_ExplicitValueNoWarning(t *testing.T) {
+	// A real cluster name must suppress the warning.
+	if warnIfClusterNameUnset("prod-us-east-1") {
+		t.Error("expected warnIfClusterNameUnset(\"prod-us-east-1\") to return false")
+	}
+}
+
+// ----------------------------------------------------------------------------
 // panic recovery
 // ----------------------------------------------------------------------------
 
