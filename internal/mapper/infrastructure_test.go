@@ -350,10 +350,10 @@ func TestFromNodeConditionChange_NodeNotReadyEmitsEvent(t *testing.T) {
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{
 				{
-					Type:    corev1.NodeReady,
-					Status:  corev1.ConditionFalse,
-					Reason:  "KubeletNotReady",
-					Message: "container runtime not responding",
+					Type:               corev1.NodeReady,
+					Status:             corev1.ConditionFalse,
+					Reason:             "KubeletNotReady",
+					Message:            "container runtime not responding",
 					LastTransitionTime: metav1.Time{Time: time.Now()},
 				},
 			},

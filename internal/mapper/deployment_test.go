@@ -530,8 +530,8 @@ func TestFromDeploymentDelete_ServiceIDFromAnnotation(t *testing.T) {
 			Name:      "web",
 			Namespace: "prod",
 			Annotations: map[string]string{
-				identity.ServiceIDAnnotation:              "my-service",
-				"deployment.kubernetes.io/revision":       "5",
+				identity.ServiceIDAnnotation:        "my-service",
+				"deployment.kubernetes.io/revision": "5",
 			},
 			CreationTimestamp: metav1.Time{Time: time.Now().Add(-time.Hour)},
 		},
