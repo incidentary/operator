@@ -31,7 +31,12 @@ import (
 	"github.com/incidentary/operator/internal/identity"
 )
 
-const kindDeployment = "Deployment"
+const (
+	kindDeployment  = "Deployment"
+	kindStatefulSet = "StatefulSet"
+	kindDaemonSet   = "DaemonSet"
+	kindPod         = "Pod"
+)
 
 // newScheme returns a runtime.Scheme registered with corev1 and appsv1.
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -191,7 +196,7 @@ func TestResolve_PodOwnedByStatefulSet(t *testing.T) {
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: "apps/v1",
-					Kind:       "StatefulSet",
+					Kind:       kindStatefulSet,
 					Name:       "postgres",
 					Controller: ptrBool(true),
 				},
@@ -207,8 +212,8 @@ func TestResolve_PodOwnedByStatefulSet(t *testing.T) {
 	if got.ServiceID != "postgres" {
 		t.Fatalf("ServiceID = %q, want %q", got.ServiceID, "postgres")
 	}
-	if got.OwnerKind != "StatefulSet" {
-		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, "StatefulSet")
+	if got.OwnerKind != kindStatefulSet {
+		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, kindStatefulSet)
 	}
 	if got.Source != identity.SourceWorkloadName {
 		t.Fatalf("Source = %q, want %q", got.Source, identity.SourceWorkloadName)
@@ -234,7 +239,7 @@ func TestResolve_PodOwnedByDaemonSet(t *testing.T) {
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: "apps/v1",
-					Kind:       "DaemonSet",
+					Kind:       kindDaemonSet,
 					Name:       "fluent-bit",
 					Controller: ptrBool(true),
 				},
@@ -250,8 +255,8 @@ func TestResolve_PodOwnedByDaemonSet(t *testing.T) {
 	if got.ServiceID != "log-collector" {
 		t.Fatalf("ServiceID = %q, want %q", got.ServiceID, "log-collector")
 	}
-	if got.OwnerKind != "DaemonSet" {
-		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, "DaemonSet")
+	if got.OwnerKind != kindDaemonSet {
+		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, kindDaemonSet)
 	}
 	if got.Source != identity.SourceAnnotation {
 		t.Fatalf("Source = %q, want %q", got.Source, identity.SourceAnnotation)
@@ -276,8 +281,8 @@ func TestResolve_NakedPod(t *testing.T) {
 	if got.ServiceID != "debug-pod" {
 		t.Fatalf("ServiceID = %q, want %q", got.ServiceID, "debug-pod")
 	}
-	if got.OwnerKind != "Pod" {
-		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, "Pod")
+	if got.OwnerKind != kindPod {
+		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, kindPod)
 	}
 	if got.Source != identity.SourceWorkloadName {
 		t.Fatalf("Source = %q, want %q", got.Source, identity.SourceWorkloadName)
@@ -348,8 +353,8 @@ func TestResolve_PodOrphanedReplicaSet(t *testing.T) {
 	if got.ServiceID != "orphan-xyz" {
 		t.Fatalf("ServiceID = %q, want pod fallback %q", got.ServiceID, "orphan-xyz")
 	}
-	if got.OwnerKind != "Pod" {
-		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, "Pod")
+	if got.OwnerKind != kindPod {
+		t.Fatalf("OwnerKind = %q, want %q", got.OwnerKind, kindPod)
 	}
 }
 
@@ -382,7 +387,7 @@ func TestResolveRef_Pod(t *testing.T) {
 	}
 	r := identity.NewResolver(newFakeClient(t, d, rs, pod))
 
-	got, err := r.ResolveRef(context.Background(), "Pod", "prod", "checkout-abcde-xyz")
+	got, err := r.ResolveRef(context.Background(), kindPod, "prod", "checkout-abcde-xyz")
 	if err != nil {
 		t.Fatalf("ResolveRef: %v", err)
 	}
@@ -486,7 +491,7 @@ func TestResolve_StatefulSetDirect(t *testing.T) {
 	if got.ServiceID != "kafka-service" {
 		t.Fatalf("ServiceID = %q, want %q", got.ServiceID, "kafka-service")
 	}
-	if got.OwnerKind != "StatefulSet" {
+	if got.OwnerKind != kindStatefulSet {
 		t.Fatalf("OwnerKind = %q, want StatefulSet", got.OwnerKind)
 	}
 	if got.Source != identity.SourceAnnotation {
@@ -512,7 +517,7 @@ func TestResolve_DaemonSetDirect(t *testing.T) {
 	if got.ServiceID != "node-exporter" {
 		t.Fatalf("ServiceID = %q, want %q", got.ServiceID, "node-exporter")
 	}
-	if got.OwnerKind != "DaemonSet" {
+	if got.OwnerKind != kindDaemonSet {
 		t.Fatalf("OwnerKind = %q, want DaemonSet", got.OwnerKind)
 	}
 	if got.Source != identity.SourceWorkloadName {
@@ -571,7 +576,7 @@ func TestResolve_PodOwnedByJobFallsBackToPod(t *testing.T) {
 	if got.ServiceID != "batch-worker-xyz" {
 		t.Fatalf("ServiceID = %q, want pod name %q", got.ServiceID, "batch-worker-xyz")
 	}
-	if got.OwnerKind != "Pod" {
+	if got.OwnerKind != kindPod {
 		t.Fatalf("OwnerKind = %q, want Pod (unknown controller fallback)", got.OwnerKind)
 	}
 }
@@ -584,7 +589,7 @@ func TestResolveRef_EmptyNameReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
 	r := identity.NewResolver(newFakeClient(t))
-	got, err := r.ResolveRef(context.Background(), "Pod", "prod", "")
+	got, err := r.ResolveRef(context.Background(), kindPod, "prod", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -627,14 +632,14 @@ func TestResolveRef_StatefulSet(t *testing.T) {
 	}
 	r := identity.NewResolver(newFakeClient(t, ss))
 
-	got, err := r.ResolveRef(context.Background(), "StatefulSet", "data", "mysql")
+	got, err := r.ResolveRef(context.Background(), kindStatefulSet, "data", "mysql")
 	if err != nil {
 		t.Fatalf("ResolveRef: %v", err)
 	}
 	if got.ServiceID != "mysql" {
 		t.Fatalf("ServiceID = %q, want mysql", got.ServiceID)
 	}
-	if got.OwnerKind != "StatefulSet" {
+	if got.OwnerKind != kindStatefulSet {
 		t.Fatalf("OwnerKind = %q, want StatefulSet", got.OwnerKind)
 	}
 }
@@ -647,14 +652,14 @@ func TestResolveRef_DaemonSet(t *testing.T) {
 	}
 	r := identity.NewResolver(newFakeClient(t, ds))
 
-	got, err := r.ResolveRef(context.Background(), "DaemonSet", "monitoring", "promtail")
+	got, err := r.ResolveRef(context.Background(), kindDaemonSet, "monitoring", "promtail")
 	if err != nil {
 		t.Fatalf("ResolveRef: %v", err)
 	}
 	if got.ServiceID != "promtail" {
 		t.Fatalf("ServiceID = %q, want promtail", got.ServiceID)
 	}
-	if got.OwnerKind != "DaemonSet" {
+	if got.OwnerKind != kindDaemonSet {
 		t.Fatalf("OwnerKind = %q, want DaemonSet", got.OwnerKind)
 	}
 }
@@ -715,7 +720,7 @@ func TestResolve_PodOrphanedStatefulSet(t *testing.T) {
 			Name:      "gone-ss-0",
 			Namespace: "data",
 			OwnerReferences: []metav1.OwnerReference{
-				{Kind: "StatefulSet", Name: "gone-ss", Controller: ptrBool(true)},
+				{Kind: kindStatefulSet, Name: "gone-ss", Controller: ptrBool(true)},
 			},
 		},
 	}
@@ -729,7 +734,7 @@ func TestResolve_PodOrphanedStatefulSet(t *testing.T) {
 	if got.ServiceID != "gone-ss" {
 		t.Fatalf("ServiceID = %q, want %q", got.ServiceID, "gone-ss")
 	}
-	if got.OwnerKind != "StatefulSet" {
+	if got.OwnerKind != kindStatefulSet {
 		t.Fatalf("OwnerKind = %q, want StatefulSet", got.OwnerKind)
 	}
 }
@@ -742,7 +747,7 @@ func TestResolve_PodOrphanedDaemonSet(t *testing.T) {
 			Name:      "gone-ds-node1",
 			Namespace: "kube-system",
 			OwnerReferences: []metav1.OwnerReference{
-				{Kind: "DaemonSet", Name: "gone-ds", Controller: ptrBool(true)},
+				{Kind: kindDaemonSet, Name: "gone-ds", Controller: ptrBool(true)},
 			},
 		},
 	}
@@ -755,7 +760,7 @@ func TestResolve_PodOrphanedDaemonSet(t *testing.T) {
 	if got.ServiceID != "gone-ds" {
 		t.Fatalf("ServiceID = %q, want %q", got.ServiceID, "gone-ds")
 	}
-	if got.OwnerKind != "DaemonSet" {
+	if got.OwnerKind != kindDaemonSet {
 		t.Fatalf("OwnerKind = %q, want DaemonSet", got.OwnerKind)
 	}
 }
@@ -815,7 +820,7 @@ func TestResolveRef_StatefulSetFetchError(t *testing.T) {
 	t.Parallel()
 
 	r := identity.NewResolver(&errorReader{err: errors.New("etcd timeout")})
-	_, err := r.ResolveRef(context.Background(), "StatefulSet", "data", "pg")
+	_, err := r.ResolveRef(context.Background(), kindStatefulSet, "data", "pg")
 	if err == nil {
 		t.Fatal("expected error from ResolveRef for StatefulSet fetch failure")
 	}
@@ -825,7 +830,7 @@ func TestResolveRef_DaemonSetFetchError(t *testing.T) {
 	t.Parallel()
 
 	r := identity.NewResolver(&errorReader{err: errors.New("connection refused")})
-	_, err := r.ResolveRef(context.Background(), "DaemonSet", "kube-system", "ds")
+	_, err := r.ResolveRef(context.Background(), kindDaemonSet, "kube-system", "ds")
 	if err == nil {
 		t.Fatal("expected error from ResolveRef for DaemonSet fetch failure")
 	}
@@ -845,7 +850,7 @@ func TestResolveRef_PodFetchError(t *testing.T) {
 	t.Parallel()
 
 	r := identity.NewResolver(&errorReader{err: errors.New("throttled")})
-	_, err := r.ResolveRef(context.Background(), "Pod", "prod", "my-pod")
+	_, err := r.ResolveRef(context.Background(), kindPod, "prod", "my-pod")
 	if err == nil {
 		t.Fatal("expected error from ResolveRef for Pod fetch failure")
 	}
@@ -902,7 +907,7 @@ func TestResolve_PodStatefulSetFetchError(t *testing.T) {
 			Name:      "db-0",
 			Namespace: "data",
 			OwnerReferences: []metav1.OwnerReference{
-				{Kind: "StatefulSet", Name: "db", Controller: ptrBool(true)},
+				{Kind: kindStatefulSet, Name: "db", Controller: ptrBool(true)},
 			},
 		},
 	}
@@ -921,7 +926,7 @@ func TestResolve_PodDaemonSetFetchError(t *testing.T) {
 			Name:      "ds-node1",
 			Namespace: "kube-system",
 			OwnerReferences: []metav1.OwnerReference{
-				{Kind: "DaemonSet", Name: "fluentd", Controller: ptrBool(true)},
+				{Kind: kindDaemonSet, Name: "fluentd", Controller: ptrBool(true)},
 			},
 		},
 	}

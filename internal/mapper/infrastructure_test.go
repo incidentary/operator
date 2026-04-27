@@ -623,9 +623,9 @@ func progressingCondition(status corev1.ConditionStatus, reason string) appsv1.D
 	}
 }
 
-func deploymentWithProgressing(name, ns string, cond appsv1.DeploymentCondition) *appsv1.Deployment {
+func deploymentWithProgressing(cond appsv1.DeploymentCondition) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
 		Status: appsv1.DeploymentStatus{
 			Conditions: []appsv1.DeploymentCondition{cond},
 		},
@@ -642,7 +642,7 @@ func TestFromDeploymentRollout_NilNewReturnsNil(t *testing.T) {
 
 func TestFromDeploymentRollout_StatusUnchangedReturnsNil(t *testing.T) {
 	m := newTestMapper(t)
-	dep := deploymentWithProgressing("web", "prod",
+	dep := deploymentWithProgressing(
 		progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
 	)
 	evts, err := m.FromDeploymentRollout(context.Background(), dep.DeepCopy(), dep)
@@ -653,7 +653,7 @@ func TestFromDeploymentRollout_StatusUnchangedReturnsNil(t *testing.T) {
 
 func TestFromDeploymentRollout_NilOldToProgressingEmitsEvent(t *testing.T) {
 	m := newTestMapper(t)
-	newDep := deploymentWithProgressing("web", "prod",
+	newDep := deploymentWithProgressing(
 		progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
 	)
 	evts, err := m.FromDeploymentRollout(context.Background(), nil, newDep)
@@ -673,10 +673,10 @@ func TestFromDeploymentRollout_NilOldToProgressingEmitsEvent(t *testing.T) {
 
 func TestFromDeploymentRollout_ProgressingToCompleteEmitsEvent(t *testing.T) {
 	m := newTestMapper(t)
-	oldDep := deploymentWithProgressing("web", "prod",
+	oldDep := deploymentWithProgressing(
 		progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
 	)
-	newDep := deploymentWithProgressing("web", "prod",
+	newDep := deploymentWithProgressing(
 		progressingCondition(corev1.ConditionTrue, "NewReplicaSetAvailable"),
 	)
 	evts, err := m.FromDeploymentRollout(context.Background(), oldDep, newDep)
@@ -721,10 +721,10 @@ func TestFromDeploymentRollout_WithRevisionAnnotationSetsAttr(t *testing.T) {
 
 func TestFromDeploymentRollout_ProgressingToFailedEmitsEvent(t *testing.T) {
 	m := newTestMapper(t)
-	oldDep := deploymentWithProgressing("web", "prod",
+	oldDep := deploymentWithProgressing(
 		progressingCondition(corev1.ConditionTrue, "ReplicaSetUpdated"),
 	)
-	newDep := deploymentWithProgressing("web", "prod",
+	newDep := deploymentWithProgressing(
 		progressingCondition(corev1.ConditionFalse, "ProgressDeadlineExceeded"),
 	)
 	evts, err := m.FromDeploymentRollout(context.Background(), oldDep, newDep)
