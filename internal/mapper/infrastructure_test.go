@@ -250,6 +250,110 @@ func TestFromNodeConditionChange_NoTransition(t *testing.T) {
 	}
 }
 
+func TestFromNodeConditionChange_NilNewNodeReturnsNil(t *testing.T) {
+	m := newTestMapper(t)
+	out, err := m.FromNodeConditionChange(context.Background(), nil, nil)
+	if err != nil || out != nil {
+		t.Errorf("got %v, %v; want nil, nil", out, err)
+	}
+}
+
+func TestFromNodeConditionChange_NodeNotReadyEmitsEvent(t *testing.T) {
+	// NodeReady flipping to False must produce a K8S_NODE_PRESSURE event.
+	oldNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-2"},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	newNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-2"},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:    corev1.NodeReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "KubeletNotReady",
+					Message: "container runtime not responding",
+					LastTransitionTime: metav1.Time{Time: time.Now()},
+				},
+			},
+		},
+	}
+	m := newTestMapper(t)
+	out, err := m.FromNodeConditionChange(context.Background(), oldNode, newNode)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d events, want 1 (NotReady)", len(out))
+	}
+	if out[0].Kind != wireformat.KindK8sNodePressure {
+		t.Errorf("kind = %q, want K8S_NODE_PRESSURE", out[0].Kind)
+	}
+	if out[0].Attributes["k8s.reason"] != "NotReady" {
+		t.Errorf("k8s.reason = %v, want NotReady", out[0].Attributes["k8s.reason"])
+	}
+	// cond.Reason and cond.Message should appear as attributes.
+	if out[0].Attributes["k8s.condition.reason"] != "KubeletNotReady" {
+		t.Errorf("k8s.condition.reason = %v, want KubeletNotReady", out[0].Attributes["k8s.condition.reason"])
+	}
+	if out[0].Attributes["k8s.message"] != "container runtime not responding" {
+		t.Errorf("k8s.message = %v", out[0].Attributes["k8s.message"])
+	}
+}
+
+func TestFromNodeConditionChange_FallsBackToHeartbeatTime(t *testing.T) {
+	// When LastTransitionTime is zero, occurred_at should use LastHeartbeatTime.
+	heartbeat := metav1.Time{Time: time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)}
+	newNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-4"},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:              corev1.NodeMemoryPressure,
+					Status:            corev1.ConditionTrue,
+					LastHeartbeatTime: heartbeat,
+					// LastTransitionTime intentionally zero
+				},
+			},
+		},
+	}
+	m := newTestMapper(t)
+	out, err := m.FromNodeConditionChange(context.Background(), nil, newNode)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d events, want 1", len(out))
+	}
+	if out[0].OccurredAt != wireformat.TimeToUnixNano(heartbeat.Time) {
+		t.Errorf("OccurredAt = %d, want heartbeat time %d", out[0].OccurredAt, wireformat.TimeToUnixNano(heartbeat.Time))
+	}
+}
+
+func TestFromNodeConditionChange_AlreadyNotReadySkipped(t *testing.T) {
+	// If node was already not-ready, no new event should be emitted.
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-3"},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionFalse},
+			},
+		},
+	}
+	m := newTestMapper(t)
+	out, err := m.FromNodeConditionChange(context.Background(), node.DeepCopy(), node)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("got %d events; already-not-ready node should not re-emit", len(out))
+	}
+}
+
 // -----------------------------------------------------------------------------
 // FromHPAScale.
 // -----------------------------------------------------------------------------
