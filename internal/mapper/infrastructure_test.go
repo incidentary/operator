@@ -12,6 +12,7 @@ package mapper
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -798,5 +799,36 @@ func TestFromPodStatusChange_AllTimestampsZeroFallsBackToNow(t *testing.T) {
 	}
 	if out[0].OccurredAt <= 0 {
 		t.Errorf("OccurredAt = %d, want > 0 (§7.1)", out[0].OccurredAt)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// truncate — §17 attribute string limit.
+// ----------------------------------------------------------------------------
+
+func TestTruncate_ShortStringUnchanged(t *testing.T) {
+	s := "hello world"
+	if got := truncate(s, 2048); got != s {
+		t.Errorf("truncate(%q, 2048) = %q; want unchanged", s, got)
+	}
+}
+
+func TestTruncate_ExactMaxUnchanged(t *testing.T) {
+	s := strings.Repeat("a", 2048)
+	if got := truncate(s, 2048); got != s {
+		t.Error("string at exactly max should be returned unchanged")
+	}
+}
+
+func TestTruncate_ExceedsMaxClipsWithEllipsis(t *testing.T) {
+	s := strings.Repeat("a", 2049)
+	got := truncate(s, 2048)
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncated string should end with ellipsis (U+2026), got %q suffix", got[len(got)-4:])
+	}
+	// Prefix must be exactly max-1 bytes of the original.
+	wantPrefix := s[:2047]
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Error("truncated prefix mismatch")
 	}
 }
