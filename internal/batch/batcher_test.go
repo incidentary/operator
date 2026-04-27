@@ -258,6 +258,38 @@ func (c *batchCapturingClient) last() *wireformat.IngestBatch {
 	return c._batch
 }
 
+func TestBatcher_WithMaxBatchSizeZeroIgnored(t *testing.T) {
+	// n <= 0 must leave the default max batch size unchanged.
+	c := &fakeClient{}
+	b := NewBatcher(c, testResource, testAgent, testr.New(t), WithMaxBatchSize(0))
+	if b.maxBatchSize != DefaultMaxBatchSize {
+		t.Errorf("maxBatchSize = %d after WithMaxBatchSize(0), want default %d",
+			b.maxBatchSize, DefaultMaxBatchSize)
+	}
+}
+
+func TestBatcher_WithMaxBatchSizeClampsToAbsoluteMax(t *testing.T) {
+	// n > AbsoluteMaxBatchSize must be clamped.
+	c := &fakeClient{}
+	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+		WithMaxBatchSize(AbsoluteMaxBatchSize+1),
+	)
+	if b.maxBatchSize != AbsoluteMaxBatchSize {
+		t.Errorf("maxBatchSize = %d, want AbsoluteMaxBatchSize %d",
+			b.maxBatchSize, AbsoluteMaxBatchSize)
+	}
+}
+
+func TestBatcher_WithFlushIntervalZeroIgnored(t *testing.T) {
+	// d <= 0 must leave the default flush interval unchanged.
+	c := &fakeClient{}
+	b := NewBatcher(c, testResource, testAgent, testr.New(t), WithFlushInterval(0))
+	if b.flushInterval != DefaultFlushInterval {
+		t.Errorf("flushInterval = %v after WithFlushInterval(0), want default %v",
+			b.flushInterval, DefaultFlushInterval)
+	}
+}
+
 // waitFor polls the predicate until it returns true or the timeout fires.
 func waitFor(t *testing.T, check func() bool) {
 	t.Helper()
