@@ -167,6 +167,82 @@ func TestFromK8sEvent_NoSeriesWhenCountOne(t *testing.T) {
 	}
 }
 
+func TestFromCoreEvent_NilReturnsNotOK(t *testing.T) {
+	m := newTestMapper(t)
+	_, ok, err := m.FromCoreEvent(context.Background(), nil)
+	if err != nil || ok {
+		t.Errorf("nil event: ok=%v err=%v; want ok=false, err=nil", ok, err)
+	}
+}
+
+func TestFromCoreEvent_EmptyReasonReturnsNotOK(t *testing.T) {
+	m := newTestMapper(t)
+	ev := &corev1.Event{InvolvedObject: corev1.ObjectReference{Kind: "Pod"}}
+	_, ok, err := m.FromCoreEvent(context.Background(), ev)
+	if err != nil || ok {
+		t.Errorf("empty reason: ok=%v err=%v; want ok=false, err=nil", ok, err)
+	}
+}
+
+func TestFromCoreEvent_UnknownReasonReturnsNotOK(t *testing.T) {
+	m := newTestMapper(t)
+	ev := &corev1.Event{
+		Reason:         "SomethingUnknown",
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod"},
+	}
+	_, ok, err := m.FromCoreEvent(context.Background(), ev)
+	if err != nil || ok {
+		t.Errorf("unknown reason: ok=%v err=%v; want ok=false, err=nil", ok, err)
+	}
+}
+
+func TestFromCoreEvent_WithSourceAttrs(t *testing.T) {
+	// Source.Component and Source.Host must appear as attributes.
+	ev := &corev1.Event{
+		Reason: "BackOff",
+		InvolvedObject: corev1.ObjectReference{
+			Kind: "Pod", Namespace: "prod", Name: "web-1",
+		},
+		Source: corev1.EventSource{
+			Component: "kubelet",
+			Host:      "worker-1",
+		},
+		FirstTimestamp: metav1.Time{Time: time.Now()},
+	}
+	m := newTestMapper(t)
+	out, ok, err := m.FromCoreEvent(context.Background(), ev)
+	if err != nil || !ok {
+		t.Fatalf("FromCoreEvent: ok=%v err=%v", ok, err)
+	}
+	if out.Attributes["k8s.source.component"] != "kubelet" {
+		t.Errorf("k8s.source.component = %v, want kubelet", out.Attributes["k8s.source.component"])
+	}
+	if out.Attributes["k8s.node.name"] != "worker-1" {
+		t.Errorf("k8s.node.name = %v, want worker-1", out.Attributes["k8s.node.name"])
+	}
+}
+
+func TestFromCoreEvent_FallbackToEventTime(t *testing.T) {
+	// When FirstTimestamp is zero, occurred_at should use EventTime.
+	eventTime := metav1.MicroTime{Time: time.Date(2025, 3, 1, 10, 0, 0, 0, time.UTC)}
+	ev := &corev1.Event{
+		Reason: "BackOff",
+		InvolvedObject: corev1.ObjectReference{
+			Kind: "Pod", Namespace: "prod", Name: "web-1",
+		},
+		// FirstTimestamp intentionally zero
+		EventTime: eventTime,
+	}
+	m := newTestMapper(t)
+	out, ok, err := m.FromCoreEvent(context.Background(), ev)
+	if err != nil || !ok {
+		t.Fatalf("FromCoreEvent: ok=%v err=%v", ok, err)
+	}
+	if out.OccurredAt != eventTime.UnixNano() {
+		t.Errorf("OccurredAt = %d, want EventTime %d", out.OccurredAt, eventTime.UnixNano())
+	}
+}
+
 func TestFromCoreEvent_LegacyCount(t *testing.T) {
 	ev := &corev1.Event{
 		Reason: "BackOff",
