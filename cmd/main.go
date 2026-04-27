@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -96,7 +97,8 @@ func (h *pipelineHandler) OnDelete(ctx context.Context, obj client.Object) {
 func (h *pipelineHandler) emit(ctx context.Context, oldObj, newObj client.Object) {
 	defer func() {
 		if r := recover(); r != nil {
-			h.log.Error(fmt.Errorf("%v", r), "mapper dispatch panicked; dropping event")
+			h.log.Error(fmt.Errorf("%v", r), "mapper dispatch panicked; dropping event",
+				"stack", string(debug.Stack()))
 		}
 	}()
 	events, err := h.mapper.Dispatch(ctx, oldObj, newObj)
