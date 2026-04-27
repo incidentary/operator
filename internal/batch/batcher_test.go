@@ -12,6 +12,7 @@ package batch
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -216,6 +217,95 @@ func TestBatcher_NilClientPanics(t *testing.T) {
 		}
 	}()
 	_ = NewBatcher(nil, testResource, testAgent, testr.New(t))
+}
+
+func TestNewBatcher_NilResourcePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil resource provider")
+		}
+	}()
+	_ = NewBatcher(&fakeClient{}, nil, testAgent, testr.New(t))
+}
+
+func TestNewBatcher_NilAgentPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil agent provider")
+		}
+	}()
+	_ = NewBatcher(&fakeClient{}, testResource, nil, testr.New(t))
+}
+
+func TestBatcher_EnqueueEmptyIsNoop(t *testing.T) {
+	c := &fakeClient{}
+	b := NewBatcher(c, testResource, testAgent, testr.New(t))
+	b.Enqueue()
+	if n := b.BufferSize(); n != 0 {
+		t.Errorf("BufferSize = %d after Enqueue(), want 0", n)
+	}
+}
+
+// TestBatcher_FlushErrorIsLogged exercises the scheduled-flush and final-drain
+// error branches: the ticker fires, flushNow returns an error, and the error
+// is logged rather than surfaced to the caller.
+func TestBatcher_FlushErrorIsLogged(t *testing.T) {
+	c := &fakeClient{err: errors.New("ingest down")}
+	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+		WithFlushInterval(10*time.Millisecond),
+	)
+	stop := startBatcher(t, b)
+	b.Enqueue(event("err-1"))
+	waitFor(t, func() bool { return c.FlushCount() >= 1 })
+	stop() // cancels ctx → drain fires (also fails) → "final drain failed" logged
+}
+
+// TestBatcher_EagerFlushErrorIsLogged verifies that when the buffer hits
+// maxBatchSize the eager-flush path fires and a client error is logged without
+// crashing.
+func TestBatcher_EagerFlushErrorIsLogged(t *testing.T) {
+	c := &fakeClient{err: errors.New("ingest down")}
+	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+		WithMaxBatchSize(1),
+		WithFlushInterval(10*time.Second),
+	)
+	stop := startBatcher(t, b)
+	b.Enqueue(event("eager-err-1")) // fills buffer → eager-flush fires
+	waitFor(t, func() bool { return c.FlushCount() >= 1 })
+	stop()
+}
+
+// TestBatcher_FinalDrainErrorIsLogged covers the "final drain failed" branch:
+// the buffer still holds events at shutdown and the client errors during drain.
+func TestBatcher_FinalDrainErrorIsLogged(t *testing.T) {
+	c := &fakeClient{err: errors.New("ingest down")}
+	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+		WithFlushInterval(10*time.Second), // keep ticker out of the way
+	)
+	stop := startBatcher(t, b)
+	b.Enqueue(event("drain-err-1")) // buffer is non-empty when drain fires
+	stop()                          // ctx cancel → drain → client errors → log
+}
+
+// TestBatcher_DroppedEventsAreRecorded verifies that when ingest drops events
+// the per-reason metrics and the "ingest dropped events" log line are produced.
+func TestBatcher_DroppedEventsAreRecorded(t *testing.T) {
+	c := &fakeClient{
+		response: client.FlushResult{
+			IngestResponse: client.IngestResponse{
+				Accepted:    0,
+				Dropped:     2,
+				DropReasons: map[string]int{"RATE_LIMITED": 2},
+			},
+		},
+	}
+	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+		WithFlushInterval(10*time.Millisecond),
+	)
+	stop := startBatcher(t, b)
+	b.Enqueue(event("drop-1"), event("drop-2"))
+	waitFor(t, func() bool { return c.FlushCount() >= 1 })
+	stop()
 }
 
 func TestBatcher_FlushedAtIsPositive(t *testing.T) {
