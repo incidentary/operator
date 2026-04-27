@@ -189,6 +189,14 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
+// warnIfMisconfigured returns true when an API key is set without a matching
+// workspace ID. In that state the ingest server will reject every batch with
+// 422 WORKSPACE_MISMATCH, silently discarding all events. The caller is
+// responsible for logging; this function has no side effects.
+func warnIfMisconfigured(apiKey, workspaceID string) bool {
+	return apiKey != "" && workspaceID == ""
+}
+
 // leaderMetricRunnable sets incidentary_operator_leader_is_leader to 1 when
 // this instance becomes the leader and back to 0 on shutdown. It implements
 // LeaderElectionRunnable so it only runs on the elected leader.
@@ -349,10 +357,17 @@ func main() {
 	// in the IncidentaryConfig CR on every reconcile, so the operator can
 	// pick up key rotations without a restart.
 	apiKey := os.Getenv("INCIDENTARY_API_KEY")
+	workspaceID := getEnvOrDefault("INCIDENTARY_WORKSPACE_ID", "")
 	ingestEndpoint := os.Getenv("INCIDENTARY_INGEST_ENDPOINT")
 	if apiKey == "" {
 		setupLog.Info("INCIDENTARY_API_KEY is not set; running without an ingest client. " +
 			"The operator will still watch resources but no events will be sent.")
+	}
+	if warnIfMisconfigured(apiKey, workspaceID) {
+		setupLog.Error(nil,
+			"INCIDENTARY_WORKSPACE_ID is not set but INCIDENTARY_API_KEY is; "+
+				"the server will reject every batch with WORKSPACE_MISMATCH (422). "+
+				"Set INCIDENTARY_WORKSPACE_ID to the workspace that owns the API key.")
 	}
 
 	var ingest ingestclient.IngestClient
@@ -374,7 +389,7 @@ func main() {
 		return wireformat.Agent{
 			Type:        wireformat.AgentTypeK8sOperator,
 			Version:     ingestclient.DefaultAgentVersion,
-			WorkspaceID: getEnvOrDefault("INCIDENTARY_WORKSPACE_ID", ""),
+			WorkspaceID: workspaceID,
 		}
 	}
 

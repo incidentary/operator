@@ -248,6 +248,32 @@ func TestPipelineHandler_EmitNilNewObjHandledGracefully(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
+// warnIfMisconfigured
+// ----------------------------------------------------------------------------
+
+func TestWarnIfMisconfigured_APIKeyWithNoWorkspace(t *testing.T) {
+	// An API key without a workspace ID causes 422 WORKSPACE_MISMATCH from the
+	// ingest server; warnIfMisconfigured should return true to signal the bad config.
+	if !warnIfMisconfigured("my-api-key", "") {
+		t.Error("expected warnIfMisconfigured to return true when workspace ID is empty")
+	}
+}
+
+func TestWarnIfMisconfigured_NoAPIKey(t *testing.T) {
+	// When no API key is set, the dropping client is used; no mismatch possible.
+	if warnIfMisconfigured("", "") {
+		t.Error("expected warnIfMisconfigured to return false when API key is empty")
+	}
+}
+
+func TestWarnIfMisconfigured_BothSet(t *testing.T) {
+	// Fully configured — no warning.
+	if warnIfMisconfigured("my-api-key", "ws-abc123") {
+		t.Error("expected warnIfMisconfigured to return false when both values are set")
+	}
+}
+
+// ----------------------------------------------------------------------------
 // panic recovery
 // ----------------------------------------------------------------------------
 
