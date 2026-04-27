@@ -364,3 +364,15 @@ func TestResourceUnmarshalJSONInvalid(t *testing.T) {
 		t.Error("expected error for invalid JSON, got nil")
 	}
 }
+
+// TestResourceUnmarshalJSONWrongType covers the internal error-return path in
+// unmarshalFlatStringMap and Resource.UnmarshalJSON: the input is valid JSON
+// (an array) so json.Unmarshal calls UnmarshalJSON, but the inner unmarshal
+// into map[string]string fails because arrays cannot be decoded as maps.
+func TestResourceUnmarshalJSONWrongType(t *testing.T) {
+	t.Parallel()
+	var r wireformat.Resource
+	if err := json.Unmarshal([]byte(`[1, 2, 3]`), &r); err == nil {
+		t.Error("expected error when unmarshaling a JSON array into Resource, got nil")
+	}
+}
