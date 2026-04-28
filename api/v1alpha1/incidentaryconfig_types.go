@@ -30,6 +30,14 @@ type IncidentaryConfigSpec struct {
 	// +kubebuilder:validation:Required
 	APIKeySecretRef SecretKeyRef `json:"apiKeySecretRef"`
 
+	// workspaceID is the Incidentary workspace identifier embedded in every
+	// ingest batch as agent.workspace_id. Without it, the server rejects
+	// every batch with WORKSPACE_MISMATCH (422). Not a secret — safe to
+	// commit to git or set via Helm values.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	WorkspaceID string `json:"workspaceId"`
+
 	// watchNamespaces restricts the operator to these namespaces.
 	// When empty (default), the operator watches all namespaces except those
 	// listed in excludeNamespaces.

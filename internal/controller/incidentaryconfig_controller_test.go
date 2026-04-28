@@ -97,6 +97,7 @@ var _ = Describe("IncidentaryConfig Controller", func() {
 						Name: secretName,
 						Key:  secretKey,
 					},
+					WorkspaceID: "ws_envtest",
 				},
 			}
 			Expect(k8sClient.Create(ctx, config)).To(Succeed())
@@ -137,6 +138,7 @@ var _ = Describe("IncidentaryConfig Controller", func() {
 						Name: "does-not-exist",
 						Key:  secretKey,
 					},
+					WorkspaceID: "ws_envtest",
 				},
 			}
 			Expect(k8sClient.Create(ctx, config)).To(Succeed())
@@ -187,6 +189,7 @@ var _ = Describe("IncidentaryConfig Controller", func() {
 						Name: secretName,
 						Key:  secretKey,
 					},
+					WorkspaceID: "ws_envtest",
 				},
 			}
 			Expect(k8sClient.Create(ctx, config)).To(Succeed())
@@ -236,6 +239,7 @@ var _ = Describe("IncidentaryConfig Controller", func() {
 						Name: secretName,
 						Key:  secretKey,
 					},
+					WorkspaceID:                   "ws_envtest",
 					ReconciliationIntervalSeconds: 60,
 				},
 			}
@@ -277,6 +281,7 @@ var _ = Describe("IncidentaryConfig Controller", func() {
 						Name: secretName,
 						Key:  secretKey,
 					},
+					WorkspaceID: "ws_envtest",
 				},
 			}
 			Expect(k8sClient.Create(ctx, config)).To(Succeed())

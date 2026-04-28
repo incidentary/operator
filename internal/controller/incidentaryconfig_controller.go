@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -28,8 +29,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	incidentaryv1alpha1 "github.com/incidentary/operator/api/v1alpha1"
 	"github.com/incidentary/operator/internal/informers"
@@ -72,12 +76,36 @@ type ReconcilerObserver interface {
 	Counts() (matched, ghost, mismatched, newCount int32)
 }
 
-// IncidentaryConfigReconciler reconciles a IncidentaryConfig object
+// Rotator is the contract the controller uses to hot-swap API credentials.
+// *client.Provider satisfies this interface; tests inject recording stubs.
+type Rotator interface {
+	Rotate(apiKey, workspaceID, ingestEP, topoEP, svcEP string, log logr.Logger)
+}
+
+// IncidentaryConfigReconciler reconciles a IncidentaryConfig object.
+//
+// On every successful reconcile the controller calls Rotator.Rotate with the
+// fresh API key from the referenced Secret, propagating credential rotation
+// to the Batcher / discovery loop / services reconciler without requiring
+// a pod restart. The Rotator is also called with an empty key when the
+// Secret is missing/invalid, which installs dropping stubs and stops outbound
+// telemetry until the operator is reconfigured.
 type IncidentaryConfigReconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
 	Discovery  DiscoveryObserver  // optional; zero values reported when nil
 	Classifier ReconcilerObserver // optional; zero values reported when nil
+
+	// Rotator hot-swaps API credentials when the referenced Secret changes.
+	// Optional during unit tests; production wiring is *client.Provider.
+	Rotator Rotator
+
+	// Endpoint URLs are captured at startup and reused on every Rotate call.
+	// Empty values mean "use the package default" — the HTTP client constructors
+	// fall back to the canonical Incidentary URLs.
+	IngestEndpoint   string
+	TopologyEndpoint string
+	ServicesEndpoint string
 }
 
 // --- CRD ---
@@ -139,6 +167,10 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		Namespace: config.Namespace,
 	}
 	if err := r.Get(ctx, secretKey, secret); err != nil {
+		// Whatever went wrong, the operator no longer has a valid key — flip
+		// outbound clients to dropping stubs so we don't keep hammering the
+		// API with stale credentials.
+		r.rotateToDroppingStubs(log)
 		if apierrors.IsNotFound(err) {
 			log.Info("API-key Secret not found",
 				"secret", secretKey,
@@ -168,6 +200,7 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// 3. Validate the API-key value is present and non-empty.
 	rawValue, ok := secret.Data[config.Spec.APIKeySecretRef.Key]
 	if !ok || len(rawValue) == 0 {
+		r.rotateToDroppingStubs(log)
 		log.Info("API-key Secret has empty or missing key",
 			"secret", secretKey,
 			"key", config.Spec.APIKeySecretRef.Key,
@@ -181,7 +214,22 @@ func (r *IncidentaryConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		)
 	}
 
-	// 4. Happy path: the operator has everything it needs to run. Mark Ready.
+	// 4. Hot-rotate credentials. Calling Rotate is idempotent — if the key
+	//    hasn't changed, the Provider rebuilds three small structs (~µs) and
+	//    swaps three pointers atomically. In-flight HTTP requests using the
+	//    previous client run to completion with their old credentials.
+	if r.Rotator != nil {
+		r.Rotator.Rotate(
+			string(rawValue),
+			config.Spec.WorkspaceID,
+			r.IngestEndpoint,
+			r.TopologyEndpoint,
+			r.ServicesEndpoint,
+			log,
+		)
+	}
+
+	// 5. Happy path: the operator has everything it needs to run. Mark Ready.
 	now := metav1.Now()
 	config.Status.Phase = PhaseRunning
 	config.Status.LastReconciliation = &now
@@ -253,10 +301,54 @@ func reconciliationInterval(config *incidentaryv1alpha1.IncidentaryConfig) time.
 	return time.Duration(seconds) * time.Second
 }
 
+// rotateToDroppingStubs hot-swaps the outbound clients to dropping stubs.
+// Called from every degraded path so the operator stops emitting telemetry
+// with credentials it can no longer verify.
+func (r *IncidentaryConfigReconciler) rotateToDroppingStubs(log logr.Logger) {
+	if r.Rotator == nil {
+		return
+	}
+	r.Rotator.Rotate("", "", "", "", "", log)
+}
+
+// findConfigsForSecret maps a Secret event to the IncidentaryConfig CRs in
+// the same namespace that reference it via apiKeySecretRef.Name. This is
+// what makes API-key rotation work end-to-end: edit the Secret data, the
+// controller-runtime cache invalidates, this mapping fires, and the
+// matching IncidentaryConfig gets reconciled (which calls Rotator.Rotate
+// with the new key).
+func (r *IncidentaryConfigReconciler) findConfigsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	var configs incidentaryv1alpha1.IncidentaryConfigList
+	if err := r.List(ctx, &configs, client.InNamespace(obj.GetNamespace())); err != nil {
+		// On list failure, we lose this rotation event. The next periodic
+		// reconcile (every reconciliationIntervalSeconds) will pick it up.
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, cfg := range configs.Items {
+		if cfg.Spec.APIKeySecretRef.Name == obj.GetName() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&cfg)})
+		}
+	}
+	return reqs
+}
+
 // SetupWithManager sets up the controller with the Manager.
+//
+// We watch:
+//   - IncidentaryConfig (For): primary resource.
+//   - Secret (Watches with custom mapping): when the API-key Secret data
+//     changes, reconcile the matching IncidentaryConfig so Rotator.Rotate
+//     picks up the new key. Without this watch, key rotation would only
+//     take effect at the next periodic reconcile (up to 5 min later).
 func (r *IncidentaryConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&incidentaryv1alpha1.IncidentaryConfig{}).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.findConfigsForSecret),
+			builder.WithPredicates(),
+		).
 		Named("incidentaryconfig").
 		Complete(r)
 }

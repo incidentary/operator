@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -163,5 +164,132 @@ func TestReconcile_ClassifierCountsPopulated(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Rotator / Provider hot-rotation wiring.
+//
+// On every successful reconcile, the controller calls Rotator.Rotate with
+// the current API-key Secret data and the workspace ID from the CR. This
+// gives the Batcher / discovery loop / services reconciler fresh credentials
+// without requiring a pod restart.
+// ----------------------------------------------------------------------------
+
+// recordingRotator captures every Rotate call for test inspection.
+type recordingRotator struct {
+	calls []rotateCall
+}
+
+type rotateCall struct {
+	apiKey, workspaceID, ingestEP, topoEP, svcEP string
+}
+
+func (r *recordingRotator) Rotate(apiKey, workspaceID, ingestEP, topoEP, svcEP string, _ logr.Logger) {
+	r.calls = append(r.calls, rotateCall{apiKey, workspaceID, ingestEP, topoEP, svcEP})
+}
+
+func TestReconcile_RotatesProviderWithSecretValue(t *testing.T) {
+	config := &incidentaryv1alpha1.IncidentaryConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
+		Spec: incidentaryv1alpha1.IncidentaryConfigSpec{
+			APIKeySecretRef:               incidentaryv1alpha1.SecretKeyRef{Name: "api-secret", Key: "key"},
+			WorkspaceID:                   "ws_abc123",
+			ReconciliationIntervalSeconds: 60,
+		},
+	}
+	r := newFakeReconciler(t, config, nil, nil)
+	rec := &recordingRotator{}
+	r.Rotator = rec
+	r.IngestEndpoint = "https://ingest.example.com"
+	r.TopologyEndpoint = "https://topo.example.com"
+	r.ServicesEndpoint = "https://svc.example.com"
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "cfg", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if len(rec.calls) != 1 {
+		t.Fatalf("expected 1 Rotate call, got %d", len(rec.calls))
+	}
+	got := rec.calls[0]
+	if got.apiKey != "test-api-key" {
+		t.Errorf("Rotate apiKey = %q, want %q", got.apiKey, "test-api-key")
+	}
+	if got.workspaceID != "ws_abc123" {
+		t.Errorf("Rotate workspaceID = %q, want %q", got.workspaceID, "ws_abc123")
+	}
+	if got.ingestEP != "https://ingest.example.com" {
+		t.Errorf("Rotate ingestEP = %q, want %q", got.ingestEP, "https://ingest.example.com")
+	}
+	if got.topoEP != "https://topo.example.com" {
+		t.Errorf("Rotate topoEP = %q, want %q", got.topoEP, "https://topo.example.com")
+	}
+	if got.svcEP != "https://svc.example.com" {
+		t.Errorf("Rotate svcEP = %q, want %q", got.svcEP, "https://svc.example.com")
+	}
+}
+
+func TestReconcile_RotatesEmptyKeyWhenSecretMissing(t *testing.T) {
+	// When the Secret cannot be fetched, the controller installs dropping
+	// stubs (Rotate with empty apiKey) so in-flight clients stop emitting.
+	config := &incidentaryv1alpha1.IncidentaryConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
+		Spec: incidentaryv1alpha1.IncidentaryConfigSpec{
+			APIKeySecretRef:               incidentaryv1alpha1.SecretKeyRef{Name: "missing-secret", Key: "key"},
+			WorkspaceID:                   "ws_abc",
+			ReconciliationIntervalSeconds: 60,
+		},
+	}
+	s := newUnitScheme(t)
+	// Note: no Secret seeded — it doesn't exist.
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithRuntimeObjects(config).
+		WithStatusSubresource(config).
+		Build()
+	rec := &recordingRotator{}
+	r := &IncidentaryConfigReconciler{
+		Client:  fc,
+		Scheme:  s,
+		Rotator: rec,
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "cfg", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if len(rec.calls) != 1 {
+		t.Fatalf("expected 1 Rotate call (with empty apiKey), got %d", len(rec.calls))
+	}
+	if rec.calls[0].apiKey != "" {
+		t.Errorf("Rotate apiKey = %q, want \"\" (dropping stubs)", rec.calls[0].apiKey)
+	}
+}
+
+func TestReconcile_NilRotatorIsTolerated(t *testing.T) {
+	// A nil Rotator (e.g., during unit tests without the wiring) must not
+	// cause a nil-deref panic. The reconciler should reconcile successfully.
+	config := &incidentaryv1alpha1.IncidentaryConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
+		Spec: incidentaryv1alpha1.IncidentaryConfigSpec{
+			APIKeySecretRef:               incidentaryv1alpha1.SecretKeyRef{Name: "api-secret", Key: "key"},
+			WorkspaceID:                   "ws_abc",
+			ReconciliationIntervalSeconds: 60,
+		},
+	}
+	r := newFakeReconciler(t, config, nil, nil)
+	// r.Rotator intentionally nil
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "cfg", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile with nil Rotator: %v", err)
 	}
 }

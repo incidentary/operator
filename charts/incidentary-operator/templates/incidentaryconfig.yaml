@@ -9,6 +9,7 @@ spec:
   apiKeySecretRef:
     name: {{ include "incidentary-operator.apiKeySecretName" . }}
     key: {{ include "incidentary-operator.apiKeySecretKey" . }}
+  workspaceId: {{ .Values.workspaceId | quote }}
   {{- with .Values.config.watchNamespaces }}
   watchNamespaces:
     {{- toYaml . | nindent 4 }}

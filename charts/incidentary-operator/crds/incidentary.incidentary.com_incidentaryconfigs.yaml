@@ -121,8 +121,17 @@ spec:
                 items:
                   type: string
                 type: array
+              workspaceId:
+                description: |-
+                  workspaceID is the Incidentary workspace identifier embedded in every
+                  ingest batch as agent.workspace_id. Without it, the server rejects
+                  every batch with WORKSPACE_MISMATCH (422). Not a secret — safe to
+                  commit to git or set via Helm values.
+                minLength: 1
+                type: string
             required:
             - apiKeySecretRef
+            - workspaceId
             type: object
           status:
             description: status defines the observed state of IncidentaryConfig
