@@ -160,12 +160,7 @@ func (m *Manager) Start(ctx context.Context) error {
 				handler.OnUpdate(ctx, oldObj, newObj)
 			},
 			DeleteFunc: func(raw any) {
-				// When a final state is unknown, client-go wraps the object
-				// in a DeletedFinalStateUnknown sentinel; unwrap it first.
-				if tombstone, ok := raw.(clientcache.DeletedFinalStateUnknown); ok {
-					raw = tombstone.Obj
-				}
-				co, ok := raw.(client.Object)
+				co, ok := unwrapTombstone(raw)
 				if !ok {
 					return
 				}
