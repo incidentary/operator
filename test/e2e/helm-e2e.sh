@@ -182,6 +182,7 @@ class Handler(BaseHTTPRequestHandler):
                     "events": len(events),
                     "service_ids": sorted(service_ids),
                     "agent_type": payload.get("agent", {}).get("type"),
+                    "agent_workspace_id": payload.get("agent", {}).get("workspace_id"),
                 })
                 overlap = STATE["capture_mode_pending"] & service_ids
                 if overlap:
@@ -307,6 +308,7 @@ helm --kube-context "$CONTEXT" upgrade --install incidentary \
     "$REPO_ROOT/charts/incidentary-operator" \
     --namespace "$NAMESPACE" \
     --set apiKey=e2e-test-key \
+    --set workspaceId=ws_e2e \
     --set image.tag=e2e \
     --set "image.repository=ghcr.io/incidentary/operator" \
     --set image.pullPolicy=Never \
@@ -417,6 +419,7 @@ assert_true "operator sent at least one topology report"                "len(d['
 assert_true "topology report contains the expected demo workloads"      "set(['payment-service','checkout-api']).issubset(set(w for c in d['topology_calls'] for w in c['service_ids']))"
 assert_true "operator sent ingest batches"                              "len(d['ingest_calls']) >= 1"
 assert_true "at least one batch carries an agent.type=k8s_operator"     "any(c['agent_type']=='k8s_operator' for c in d['ingest_calls'])"
+assert_true "every batch carries the configured agent.workspace_id"     "all(c.get('agent_workspace_id')=='ws_e2e' for c in d['ingest_calls'])"
 assert_true "oom-victim event was delivered"                            "any('oom-victim' in c['service_ids'] for c in d['ingest_calls'])"
 assert_true "reconciliation loop polled the services endpoint"         "d['services_calls'] >= 1"
 

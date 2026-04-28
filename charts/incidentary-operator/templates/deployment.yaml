@@ -48,6 +48,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "incidentary-operator.apiKeySecretName" . }}
                   key: {{ include "incidentary-operator.apiKeySecretKey" . }}
+            - name: INCIDENTARY_WORKSPACE_ID
+              value: {{ .Values.workspaceId | quote }}
             {{- if .Values.cluster.name }}
             - name: K8S_CLUSTER_NAME
               value: {{ .Values.cluster.name | quote }}

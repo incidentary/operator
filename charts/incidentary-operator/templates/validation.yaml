@@ -1,0 +1,16 @@
+{{/*
+Install-time validation guards.
+
+This template emits no manifest. Its only purpose is to run {{- fail }} calls
+when the chart is configured in a way that would cause silent runtime
+failure, halting `helm install`/`helm template` with a clear error before
+any resource is rendered.
+*/}}
+
+{{- /* Require workspaceId whenever apiKey is set: without it, the operator
+       starts but the server rejects every ingest batch as WORKSPACE_MISMATCH.
+       This is the single most common misconfiguration — fail fast at install
+       time rather than letting it limp along producing zero telemetry. */ -}}
+{{- if and .Values.apiKey (not .Values.workspaceId) -}}
+{{- fail "workspaceId is required when apiKey is set. Set --set workspaceId=<your-workspace-id> or set the workspaceId field in values.yaml." -}}
+{{- end -}}

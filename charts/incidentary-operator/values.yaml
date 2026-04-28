@@ -14,6 +14,12 @@
 # Stored in a Kubernetes Secret, referenced by the IncidentaryConfig CR.
 apiKey: ""
 
+# workspaceId is the Incidentary workspace identifier. REQUIRED alongside apiKey.
+# This value is not a secret — it is embedded in every ingest batch as
+# agent.workspace_id and the server uses it to route batches to the correct
+# tenant. Without it, every batch is rejected with WORKSPACE_MISMATCH (422).
+workspaceId: ""
+
 # existingSecretName — use a pre-existing Secret instead of creating one from
 # the apiKey value. When set, apiKey is ignored.
 existingSecretName: ""
