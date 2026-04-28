@@ -130,43 +130,29 @@ func (h *pipelineHandler) emit(ctx context.Context, oldObj, newObj client.Object
 	h.batcher.Enqueue(accepted...)
 }
 
-// droppingIngestClient implements ingestclient.IngestClient by silently
-// discarding every batch. It is installed when INCIDENTARY_API_KEY is not
-// set at startup so the operator can still run (watching, reconciling,
-// exposing metrics) without emitting events.
-type droppingIngestClient struct {
-	log logr.Logger
-}
-
-func (d *droppingIngestClient) Flush(_ context.Context, b *wireformat.IngestBatch) (ingestclient.FlushResult, error) {
-	d.log.V(1).Info("ingest disabled; dropping batch",
-		"events", len(b.Events),
+// buildInitialProvider constructs a client.Provider seeded with bootstrap
+// credentials from environment variables. The IncidentaryConfigReconciler
+// will Rotate() this Provider on every successful reconciliation, replacing
+// these initial clients with whatever the CR-referenced Secret contains.
+//
+// When apiKey is empty, the Provider is seeded with dropping stubs so the
+// operator runs in a no-op state until the controller reconciles a CR.
+func buildInitialProvider(
+	apiKey, workspaceID, ingestEP, topologyEP, servicesEP string,
+	log logr.Logger,
+) *ingestclient.Provider {
+	// Construct with valid clients first (NewProvider rejects nil).
+	p := ingestclient.NewProvider(
+		ingestclient.NewHTTPClient("bootstrap", ingestclient.WithEndpoint(ingestEP)),
+		ingestclient.NewTopologyClient("bootstrap", ingestclient.WithTopologyEndpoint(topologyEP)),
+		ingestclient.NewServicesClient("bootstrap", ingestclient.WithServicesEndpoint(servicesEP)),
 	)
-	return ingestclient.FlushResult{
-		IngestResponse: ingestclient.IngestResponse{Accepted: 0, Dropped: len(b.Events)},
-	}, nil
-}
-
-// droppingTopologyClient discards topology reports when the API key is unset.
-type droppingTopologyClient struct {
-	log logr.Logger
-}
-
-func (d *droppingTopologyClient) Report(
-	_ context.Context, report *ingestclient.TopologyReport,
-) (*ingestclient.TopologyResponse, error) {
-	d.log.V(1).Info("topology disabled; dropping report",
-		"workloads", len(report.Workloads),
-	)
-	return &ingestclient.TopologyResponse{Accepted: 0}, nil
-}
-
-// emptyServicesClient returns an empty services list when no API key is
-// configured, which keeps the reconciliation loop in its dormant state.
-type emptyServicesClient struct{}
-
-func (emptyServicesClient) List(context.Context) ([]ingestclient.ServiceEntry, error) {
-	return nil, nil
+	// Then immediately Rotate to the actual configuration. When apiKey is
+	// empty this installs dropping stubs; otherwise it installs real HTTP
+	// clients with the configured key. Either way the bootstrap clients
+	// above are discarded before any flush can happen.
+	p.Rotate(apiKey, workspaceID, ingestEP, topologyEP, servicesEP, log)
+	return p
 }
 
 // getEnvOrDefault returns the value of an environment variable or fallback
@@ -375,31 +361,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Controller is constructed before the discovery loop because the
-	// reconciler accepts a nil DiscoveryObserver; the field is wired below
-	// once the loop exists.
-	reconciler := &controller.IncidentaryConfigReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "IncidentaryConfig")
-		os.Exit(1)
-	}
-
-	// Phase 3: build the event-processing pipeline.
-	// Resolver → Mapper → Batcher → IngestClient.
-	//
-	// Phase 3b reads the workspace API key from INCIDENTARY_API_KEY at
-	// startup. Phase 4 will switch to resolving it from the Secret referenced
-	// in the IncidentaryConfig CR on every reconcile, so the operator can
-	// pick up key rotations without a restart.
+	// Credential precedence:
+	//   1. CR-referenced Secret (post-first-reconcile, hot-rotated by the
+	//      controller). Source of truth in steady state.
+	//   2. INCIDENTARY_API_KEY / INCIDENTARY_WORKSPACE_ID env vars
+	//      (bootstrap only — used for the brief window before the controller
+	//      reconciles for the first time).
+	//   3. Dropping stubs (when neither (1) nor (2) is configured — operator
+	//      runs read-only without emitting events).
 	apiKey := os.Getenv("INCIDENTARY_API_KEY")
 	workspaceID := getEnvOrDefault("INCIDENTARY_WORKSPACE_ID", "")
 	ingestEndpoint := os.Getenv("INCIDENTARY_INGEST_ENDPOINT")
+	topologyEndpoint := os.Getenv("INCIDENTARY_TOPOLOGY_ENDPOINT")
+	servicesEndpoint := os.Getenv("INCIDENTARY_SERVICES_ENDPOINT")
 	if apiKey == "" {
-		setupLog.Info("INCIDENTARY_API_KEY is not set; running without an ingest client. " +
-			"The operator will still watch resources but no events will be sent.")
+		setupLog.Info("INCIDENTARY_API_KEY is not set; running with dropping stubs. " +
+			"The operator will still watch resources but no events will be sent " +
+			"until the controller reconciles an IncidentaryConfig CR with a valid Secret.")
 	}
 	if warnIfMisconfigured(apiKey, workspaceID) {
 		setupLog.Error(nil,
@@ -414,11 +392,26 @@ func main() {
 			"actual cluster name for accurate event correlation.")
 	}
 
-	var ingest ingestclient.IngestClient
-	if apiKey != "" {
-		ingest = ingestclient.NewHTTPClient(apiKey, ingestclient.WithEndpoint(ingestEndpoint))
-	} else {
-		ingest = &droppingIngestClient{log: ctrl.Log.WithName("ingest")}
+	// Build the Provider with bootstrap credentials. The controller's
+	// IncidentaryConfigReconciler will Rotate() on every reconcile, replacing
+	// these with whatever the CR-referenced Secret contains.
+	provider := buildInitialProvider(apiKey, workspaceID, ingestEndpoint, topologyEndpoint, servicesEndpoint, ctrl.Log)
+
+	// Controller is constructed early so the reconciler is ready when CRs
+	// arrive. Discovery and Classifier observers are wired below once the
+	// corresponding loops exist. Provider + endpoints are wired now so the
+	// reconciler can call Rotate on the first reconciliation.
+	reconciler := &controller.IncidentaryConfigReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Rotator:          provider,
+		IngestEndpoint:   ingestEndpoint,
+		TopologyEndpoint: topologyEndpoint,
+		ServicesEndpoint: servicesEndpoint,
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "IncidentaryConfig")
+		os.Exit(1)
 	}
 
 	resource := func() wireformat.Resource {
@@ -434,12 +427,11 @@ func main() {
 		return wireformat.Agent{
 			Type:        wireformat.AgentTypeK8sOperator,
 			Version:     ingestclient.DefaultAgentVersion,
-			WorkspaceID: workspaceID,
+			WorkspaceID: provider.WorkspaceID(),
 		}
 	}
 
-	ingestFn := func() ingestclient.IngestClient { return ingest }
-	batcher := batch.NewBatcher(ingestFn, resource, agent, ctrl.Log.WithName("batcher"))
+	batcher := batch.NewBatcher(provider.Ingest, resource, agent, ctrl.Log.WithName("batcher"))
 	if err := mgr.Add(batcher); err != nil {
 		setupLog.Error(err, "Failed to add batcher to controller manager")
 		os.Exit(1)
@@ -463,24 +455,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Phase 4: discovery + topology reporter. Runs on the elected leader
-	// only, scans workloads every 5 minutes (default), and POSTs a topology
-	// report to the v2 API. When INCIDENTARY_API_KEY is unset the topology
-	// client is also replaced with a dropping stub.
-	var topologyClient ingestclient.TopologyClient
-	if apiKey != "" {
-		topologyClient = ingestclient.NewTopologyClient(apiKey,
-			ingestclient.WithTopologyEndpoint(os.Getenv("INCIDENTARY_TOPOLOGY_ENDPOINT")))
-	} else {
-		topologyClient = &droppingTopologyClient{log: ctrl.Log.WithName("topology")}
-	}
-
+	// Discovery + topology reporter. Runs on the elected leader only, scans
+	// workloads every 5 minutes (default), and POSTs a topology report. The
+	// topology client is resolved on every cycle from the Provider, so
+	// credential rotation takes effect immediately.
 	reconciliationInterval := parseDurationEnv("INCIDENTARY_RECONCILIATION_INTERVAL_SECONDS", 300*time.Second)
 	excludeNamespaces := parseStringSliceEnv("INCIDENTARY_EXCLUDE_NAMESPACES")
 	discoveryLoop := discovery.NewLoop(
 		mgr.GetClient(),
 		resolver,
-		func() ingestclient.TopologyClient { return topologyClient },
+		provider.Topology,
 		ctrl.Log.WithName("discovery"),
 		discovery.Options{
 			ClusterName:       clusterName,
@@ -494,18 +478,11 @@ func main() {
 	}
 	reconciler.Discovery = discoveryLoop
 
-	// Phase 6: services-list reconciliation loop.
-	var servicesClient ingestclient.ServicesClient
-	if apiKey != "" {
-		servicesClient = ingestclient.NewServicesClient(apiKey,
-			ingestclient.WithServicesEndpoint(os.Getenv("INCIDENTARY_SERVICES_ENDPOINT")))
-	} else {
-		servicesClient = &emptyServicesClient{}
-	}
+	// Services-list reconciliation loop. Same Provider-driven hot-rotation.
 	reconcilerLoop := discovery.NewReconciler(
 		mgr.GetClient(),
 		discoveryLoop,
-		func() ingestclient.ServicesClient { return servicesClient },
+		provider.Services,
 		ctrl.Log.WithName("reconciler"),
 		reconciliationInterval,
 	)

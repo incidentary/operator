@@ -32,10 +32,11 @@ import (
 //     continue to completion with their old credentials, which is safe
 //     because each request was authorized at the moment it started.
 type Provider struct {
-	mu     sync.RWMutex
-	ingest IngestClient
-	topo   TopologyClient
-	svc    ServicesClient
+	mu          sync.RWMutex
+	ingest      IngestClient
+	topo        TopologyClient
+	svc         ServicesClient
+	workspaceID string
 }
 
 // NewProvider builds a Provider from initial clients. All three must be
@@ -61,7 +62,11 @@ func NewProvider(ingest IngestClient, topo TopologyClient, svc ServicesClient) *
 //
 // Endpoint URLs are passed through to the HTTP client constructors; an
 // empty string falls back to the package defaults.
-func (p *Provider) Rotate(apiKey, _ string, ingestEP, topoEP, svcEP string, log logr.Logger) {
+//
+// workspaceID is stored on the Provider so callers (e.g., the batcher's
+// agent producer) can read the latest value without needing a separate
+// shared-state mechanism.
+func (p *Provider) Rotate(apiKey, workspaceID string, ingestEP, topoEP, svcEP string, log logr.Logger) {
 	var (
 		newIngest IngestClient
 		newTopo   TopologyClient
@@ -79,7 +84,17 @@ func (p *Provider) Rotate(apiKey, _ string, ingestEP, topoEP, svcEP string, log 
 
 	p.mu.Lock()
 	p.ingest, p.topo, p.svc = newIngest, newTopo, newSvc
+	p.workspaceID = workspaceID
 	p.mu.Unlock()
+}
+
+// WorkspaceID returns the active workspace ID. Updated by every Rotate call;
+// callers that produce wire-format batches should call this on every flush
+// to ensure the latest value is used.
+func (p *Provider) WorkspaceID() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.workspaceID
 }
 
 // Ingest returns the active ingest client.
