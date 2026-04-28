@@ -24,6 +24,12 @@ import (
 	"github.com/incidentary/operator/internal/identity"
 )
 
+// svcFn wraps a concrete ServicesClient in a ServicesClientProvider closure
+// for tests; production callers pass provider.Services directly.
+func svcFn(s ingestclient.ServicesClient) ServicesClientProvider {
+	return func() ingestclient.ServicesClient { return s }
+}
+
 type fakeServices struct {
 	entries []ingestclient.ServiceEntry
 	err     error
@@ -62,8 +68,8 @@ func TestReconcile_ClassifiesMatched(t *testing.T) {
 		{ServiceID: "payment", Instrumented: true},
 	}}
 
-	loop := NewLoop(c, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
-	r := NewReconciler(c, loop, svc, testr.New(t), time.Minute)
+	loop := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+	r := NewReconciler(c, loop, svcFn(svc), testr.New(t), time.Minute)
 
 	if err := r.runOnce(ctx); err != nil {
 		t.Fatalf("runOnce: %v", err)
@@ -85,8 +91,8 @@ func TestReconcile_ClassifiesGhost(t *testing.T) {
 		{ServiceID: "analytics", Instrumented: false},
 	}}
 
-	loop := NewLoop(c, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
-	r := NewReconciler(c, loop, svc, testr.New(t), time.Minute)
+	loop := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+	r := NewReconciler(c, loop, svcFn(svc), testr.New(t), time.Minute)
 
 	if err := r.runOnce(ctx); err != nil {
 		t.Fatalf("runOnce: %v", err)
@@ -111,8 +117,8 @@ func TestReconcile_ClassifiesMismatched(t *testing.T) {
 		{ServiceID: "other-thing", Instrumented: true},
 	}}
 
-	loop := NewLoop(c, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
-	r := NewReconciler(c, loop, svc, testr.New(t), time.Minute)
+	loop := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+	r := NewReconciler(c, loop, svcFn(svc), testr.New(t), time.Minute)
 
 	if err := r.runOnce(ctx); err != nil {
 		t.Fatalf("runOnce: %v", err)
@@ -134,8 +140,8 @@ func TestReconcile_ClassifiesNewWorkloadInGracePeriod(t *testing.T) {
 		{ServiceID: "other", Instrumented: true},
 	}}
 
-	loop := NewLoop(c, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
-	r := NewReconciler(c, loop, svc, testr.New(t), time.Minute)
+	loop := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+	r := NewReconciler(c, loop, svcFn(svc), testr.New(t), time.Minute)
 
 	if err := r.runOnce(ctx); err != nil {
 		t.Fatalf("runOnce: %v", err)
@@ -153,8 +159,8 @@ func TestReconcile_DormantOnEmptyServices(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
 
 	svc := &fakeServices{entries: nil}
-	loop := NewLoop(c, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
-	r := NewReconciler(c, loop, svc, testr.New(t), time.Minute)
+	loop := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+	r := NewReconciler(c, loop, svcFn(svc), testr.New(t), time.Minute)
 
 	initialBackoff := r.currentBackoff
 	if err := r.runOnce(ctx); err != nil {
@@ -182,8 +188,8 @@ func TestReconcile_AnnotationOverride(t *testing.T) {
 		{ServiceID: "payment", Instrumented: true},
 	}}
 
-	loop := NewLoop(c, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
-	r := NewReconciler(c, loop, svc, testr.New(t), time.Minute)
+	loop := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+	r := NewReconciler(c, loop, svcFn(svc), testr.New(t), time.Minute)
 
 	if err := r.runOnce(ctx); err != nil {
 		t.Fatalf("runOnce: %v", err)
@@ -256,13 +262,13 @@ func TestNewReconciler_NilClientPanics(t *testing.T) {
 			t.Error("expected panic on nil client")
 		}
 	}()
-	_ = NewReconciler(nil, nil, &fakeServices{}, testr.New(t), time.Second)
+	_ = NewReconciler(nil, nil, svcFn(&fakeServices{}), testr.New(t), time.Second)
 }
 
 func TestNewReconciler_NilServicesPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("expected panic on nil services client")
+			t.Error("expected panic on nil servicesFn")
 		}
 	}()
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
@@ -271,7 +277,7 @@ func TestNewReconciler_NilServicesPanics(t *testing.T) {
 
 func TestNewReconciler_ZeroIntervalDefaulted(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
-	r := NewReconciler(c, nil, &fakeServices{}, testr.New(t), 0)
+	r := NewReconciler(c, nil, svcFn(&fakeServices{}), testr.New(t), 0)
 	if r.interval != DefaultInterval {
 		t.Errorf("interval = %v, want DefaultInterval %v", r.interval, DefaultInterval)
 	}
@@ -279,7 +285,7 @@ func TestNewReconciler_ZeroIntervalDefaulted(t *testing.T) {
 
 func TestReconciler_NeedLeaderElection(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
-	r := NewReconciler(c, nil, &fakeServices{}, testr.New(t), time.Second)
+	r := NewReconciler(c, nil, svcFn(&fakeServices{}), testr.New(t), time.Second)
 	if !r.NeedLeaderElection() {
 		t.Error("NeedLeaderElection should be true")
 	}

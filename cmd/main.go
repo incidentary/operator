@@ -438,7 +438,8 @@ func main() {
 		}
 	}
 
-	batcher := batch.NewBatcher(ingest, resource, agent, ctrl.Log.WithName("batcher"))
+	ingestFn := func() ingestclient.IngestClient { return ingest }
+	batcher := batch.NewBatcher(ingestFn, resource, agent, ctrl.Log.WithName("batcher"))
 	if err := mgr.Add(batcher); err != nil {
 		setupLog.Error(err, "Failed to add batcher to controller manager")
 		os.Exit(1)
@@ -479,7 +480,7 @@ func main() {
 	discoveryLoop := discovery.NewLoop(
 		mgr.GetClient(),
 		resolver,
-		topologyClient,
+		func() ingestclient.TopologyClient { return topologyClient },
 		ctrl.Log.WithName("discovery"),
 		discovery.Options{
 			ClusterName:       clusterName,
@@ -504,7 +505,7 @@ func main() {
 	reconcilerLoop := discovery.NewReconciler(
 		mgr.GetClient(),
 		discoveryLoop,
-		servicesClient,
+		func() ingestclient.ServicesClient { return servicesClient },
 		ctrl.Log.WithName("reconciler"),
 		reconciliationInterval,
 	)

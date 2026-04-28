@@ -24,6 +24,13 @@ import (
 	"github.com/incidentary/operator/internal/wireformat"
 )
 
+// ingestFn wraps a concrete IngestClient in an IngestClientProvider closure
+// so test fixtures can keep declaring concrete clients while NewBatcher
+// consumes the closure form.
+func ingestFn(c client.IngestClient) IngestClientProvider {
+	return func() client.IngestClient { return c }
+}
+
 // fakeClient records every Flush call for inspection.
 type fakeClient struct {
 	mu       sync.Mutex
@@ -103,7 +110,7 @@ func startBatcher(t *testing.T, b *Batcher) func() {
 func TestBatcher_FlushesOnMaxBatchSize(t *testing.T) {
 	c := &fakeClient{}
 	log := testr.New(t)
-	b := NewBatcher(c, testResource, testAgent, log,
+	b := NewBatcher(ingestFn(c), testResource, testAgent, log,
 		WithFlushInterval(time.Hour), // never via ticker
 		WithMaxBatchSize(3),
 	)
@@ -128,7 +135,7 @@ func TestBatcher_FlushesOnMaxBatchSize(t *testing.T) {
 func TestBatcher_FlushesOnInterval(t *testing.T) {
 	c := &fakeClient{}
 	log := testr.New(t)
-	b := NewBatcher(c, testResource, testAgent, log,
+	b := NewBatcher(ingestFn(c), testResource, testAgent, log,
 		WithFlushInterval(50*time.Millisecond),
 		WithMaxBatchSize(10000),
 	)
@@ -145,7 +152,7 @@ func TestBatcher_FlushesOnInterval(t *testing.T) {
 func TestBatcher_EmptyBufferNoFlush(t *testing.T) {
 	c := &fakeClient{}
 	log := testr.New(t)
-	b := NewBatcher(c, testResource, testAgent, log,
+	b := NewBatcher(ingestFn(c), testResource, testAgent, log,
 		WithFlushInterval(30*time.Millisecond),
 	)
 	defer startBatcher(t, b)()
@@ -159,7 +166,7 @@ func TestBatcher_EmptyBufferNoFlush(t *testing.T) {
 func TestBatcher_ShutdownDrains(t *testing.T) {
 	c := &fakeClient{}
 	log := testr.New(t)
-	b := NewBatcher(c, testResource, testAgent, log,
+	b := NewBatcher(ingestFn(c), testResource, testAgent, log,
 		WithFlushInterval(time.Hour), // only shutdown drain can fire
 		WithMaxBatchSize(10000),
 	)
@@ -193,7 +200,7 @@ func TestBatcher_CaptureModeRequestedPropagated(t *testing.T) {
 		},
 	}
 	log := testr.New(t)
-	b := NewBatcher(c, testResource, testAgent, log,
+	b := NewBatcher(ingestFn(c), testResource, testAgent, log,
 		WithFlushInterval(20*time.Millisecond),
 	)
 	defer startBatcher(t, b)()
@@ -204,7 +211,7 @@ func TestBatcher_CaptureModeRequestedPropagated(t *testing.T) {
 
 func TestBatcher_NeedLeaderElection(t *testing.T) {
 	c := &fakeClient{}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t))
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t))
 	if !b.NeedLeaderElection() {
 		t.Error("NeedLeaderElection should be true")
 	}
@@ -213,7 +220,7 @@ func TestBatcher_NeedLeaderElection(t *testing.T) {
 func TestBatcher_NilClientPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("expected panic on nil client")
+			t.Error("expected panic on nil clientFn")
 		}
 	}()
 	_ = NewBatcher(nil, testResource, testAgent, testr.New(t))
@@ -225,7 +232,7 @@ func TestNewBatcher_NilResourcePanics(t *testing.T) {
 			t.Error("expected panic on nil resource provider")
 		}
 	}()
-	_ = NewBatcher(&fakeClient{}, nil, testAgent, testr.New(t))
+	_ = NewBatcher(ingestFn(&fakeClient{}), nil, testAgent, testr.New(t))
 }
 
 func TestNewBatcher_NilAgentPanics(t *testing.T) {
@@ -234,12 +241,12 @@ func TestNewBatcher_NilAgentPanics(t *testing.T) {
 			t.Error("expected panic on nil agent provider")
 		}
 	}()
-	_ = NewBatcher(&fakeClient{}, testResource, nil, testr.New(t))
+	_ = NewBatcher(ingestFn(&fakeClient{}), testResource, nil, testr.New(t))
 }
 
 func TestBatcher_EnqueueEmptyIsNoop(t *testing.T) {
 	c := &fakeClient{}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t))
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t))
 	b.Enqueue()
 	if n := b.BufferSize(); n != 0 {
 		t.Errorf("BufferSize = %d after Enqueue(), want 0", n)
@@ -251,7 +258,7 @@ func TestBatcher_EnqueueEmptyIsNoop(t *testing.T) {
 // is logged rather than surfaced to the caller.
 func TestBatcher_FlushErrorIsLogged(t *testing.T) {
 	c := &fakeClient{err: errors.New("ingest down")}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t),
 		WithFlushInterval(10*time.Millisecond),
 	)
 	stop := startBatcher(t, b)
@@ -265,7 +272,7 @@ func TestBatcher_FlushErrorIsLogged(t *testing.T) {
 // crashing.
 func TestBatcher_EagerFlushErrorIsLogged(t *testing.T) {
 	c := &fakeClient{err: errors.New("ingest down")}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t),
 		WithMaxBatchSize(1),
 		WithFlushInterval(10*time.Second),
 	)
@@ -279,7 +286,7 @@ func TestBatcher_EagerFlushErrorIsLogged(t *testing.T) {
 // the buffer still holds events at shutdown and the client errors during drain.
 func TestBatcher_FinalDrainErrorIsLogged(t *testing.T) {
 	c := &fakeClient{err: errors.New("ingest down")}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t),
 		WithFlushInterval(10*time.Second), // keep ticker out of the way
 	)
 	stop := startBatcher(t, b)
@@ -299,7 +306,7 @@ func TestBatcher_DroppedEventsAreRecorded(t *testing.T) {
 			},
 		},
 	}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t),
 		WithFlushInterval(10*time.Millisecond),
 	)
 	stop := startBatcher(t, b)
@@ -314,7 +321,7 @@ func TestBatcher_FlushedAtIsPositive(t *testing.T) {
 	var captured *wireformat.IngestBatch
 	c := &batchCapturingClient{}
 	log := testr.New(t)
-	b := NewBatcher(c, testResource, testAgent, log,
+	b := NewBatcher(ingestFn(c), testResource, testAgent, log,
 		WithFlushInterval(20*time.Millisecond),
 	)
 	defer startBatcher(t, b)()
@@ -351,7 +358,7 @@ func (c *batchCapturingClient) last() *wireformat.IngestBatch {
 func TestBatcher_WithMaxBatchSizeZeroIgnored(t *testing.T) {
 	// n <= 0 must leave the default max batch size unchanged.
 	c := &fakeClient{}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t), WithMaxBatchSize(0))
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t), WithMaxBatchSize(0))
 	if b.maxBatchSize != DefaultMaxBatchSize {
 		t.Errorf("maxBatchSize = %d after WithMaxBatchSize(0), want default %d",
 			b.maxBatchSize, DefaultMaxBatchSize)
@@ -361,7 +368,7 @@ func TestBatcher_WithMaxBatchSizeZeroIgnored(t *testing.T) {
 func TestBatcher_WithMaxBatchSizeClampsToAbsoluteMax(t *testing.T) {
 	// n > AbsoluteMaxBatchSize must be clamped.
 	c := &fakeClient{}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t),
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t),
 		WithMaxBatchSize(AbsoluteMaxBatchSize+1),
 	)
 	if b.maxBatchSize != AbsoluteMaxBatchSize {
@@ -373,7 +380,7 @@ func TestBatcher_WithMaxBatchSizeClampsToAbsoluteMax(t *testing.T) {
 func TestBatcher_WithFlushIntervalZeroIgnored(t *testing.T) {
 	// d <= 0 must leave the default flush interval unchanged.
 	c := &fakeClient{}
-	b := NewBatcher(c, testResource, testAgent, testr.New(t), WithFlushInterval(0))
+	b := NewBatcher(ingestFn(c), testResource, testAgent, testr.New(t), WithFlushInterval(0))
 	if b.flushInterval != DefaultFlushInterval {
 		t.Errorf("flushInterval = %v after WithFlushInterval(0), want default %v",
 			b.flushInterval, DefaultFlushInterval)

@@ -27,6 +27,12 @@ import (
 	"github.com/incidentary/operator/internal/identity"
 )
 
+// topoFn wraps a concrete TopologyClient in a TopologyClientProvider closure
+// for tests; production callers pass provider.Topology directly.
+func topoFn(t ingestclient.TopologyClient) TopologyClientProvider {
+	return func() ingestclient.TopologyClient { return t }
+}
+
 type fakeTopology struct {
 	reports []*ingestclient.TopologyReport
 	err     error
@@ -88,7 +94,7 @@ func TestRunOnce_EmitsWorkloads(t *testing.T) {
 	resolver := identity.NewResolver(c)
 	topo := &fakeTopology{}
 
-	l := NewLoop(c, resolver, topo, testr.New(t), Options{
+	l := NewLoop(c, resolver, topoFn(topo), testr.New(t), Options{
 		Interval:    time.Hour,
 		ClusterName: "unit-test",
 	})
@@ -143,7 +149,7 @@ func TestRunOnce_ExcludesNamespaces(t *testing.T) {
 	resolver := identity.NewResolver(c)
 	topo := &fakeTopology{}
 
-	l := NewLoop(c, resolver, topo, testr.New(t), Options{
+	l := NewLoop(c, resolver, topoFn(topo), testr.New(t), Options{
 		Interval:          time.Hour,
 		ExcludeNamespaces: []string{"ignored-ns"},
 	})
@@ -163,7 +169,7 @@ func TestRunOnce_NoWorkloads(t *testing.T) {
 	s := newScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	topo := &fakeTopology{}
-	l := NewLoop(c, identity.NewResolver(c), topo, testr.New(t), Options{Interval: time.Hour})
+	l := NewLoop(c, identity.NewResolver(c), topoFn(topo), testr.New(t), Options{Interval: time.Hour})
 
 	if err := l.runOnce(ctx); err != nil {
 		t.Fatalf("runOnce err: %v", err)
@@ -180,7 +186,7 @@ func TestRunOnce_TopologyError(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
 
 	topo := &fakeTopology{err: errors.New("boom")}
-	l := NewLoop(c, identity.NewResolver(c), topo, testr.New(t), Options{Interval: time.Hour})
+	l := NewLoop(c, identity.NewResolver(c), topoFn(topo), testr.New(t), Options{Interval: time.Hour})
 
 	if err := l.runOnce(ctx); err == nil {
 		t.Fatal("expected error")
@@ -193,7 +199,7 @@ func TestRunOnce_TopologyError(t *testing.T) {
 
 func TestLoop_NeedLeaderElection(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
-	l := NewLoop(c, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
+	l := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
 	if !l.NeedLeaderElection() {
 		t.Error("NeedLeaderElection should be true")
 	}
@@ -240,7 +246,7 @@ func TestRunOnce_IncludesStatefulSetAndDaemonSet(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, sts, ds, sysDaemon).Build()
 	topo := &fakeTopology{}
-	l := NewLoop(c, identity.NewResolver(c), topo, testr.New(t), Options{
+	l := NewLoop(c, identity.NewResolver(c), topoFn(topo), testr.New(t), Options{
 		Interval: time.Hour,
 	})
 
@@ -370,7 +376,7 @@ func TestNewLoop_NilClientPanics(t *testing.T) {
 		}
 	}()
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
-	_ = NewLoop(nil, identity.NewResolver(c), &fakeTopology{}, testr.New(t), Options{})
+	_ = NewLoop(nil, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
 }
 
 func TestNewLoop_NilResolverPanics(t *testing.T) {
@@ -380,13 +386,13 @@ func TestNewLoop_NilResolverPanics(t *testing.T) {
 		}
 	}()
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
-	_ = NewLoop(c, nil, &fakeTopology{}, testr.New(t), Options{})
+	_ = NewLoop(c, nil, topoFn(&fakeTopology{}), testr.New(t), Options{})
 }
 
 func TestNewLoop_NilTopologyPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("expected panic on nil topology client")
+			t.Error("expected panic on nil topologyFn")
 		}
 	}()
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()

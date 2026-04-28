@@ -52,11 +52,17 @@ type ResourceProvider func() wireformat.Resource
 // AgentProvider returns the Agent block that prefixes every batch.
 type AgentProvider func() wireformat.Agent
 
+// IngestClientProvider returns the active ingest client at call time. The
+// Batcher resolves the client on every flush so that runtime credential
+// rotation (handled by the controller's IncidentaryConfigReconciler) takes
+// effect immediately without requiring a restart.
+type IngestClientProvider func() client.IngestClient
+
 // Batcher buffers wire format events and flushes them to the ingest client.
 // A Batcher is a controller-runtime manager.Runnable: register it with
 // mgr.Add, and Start will block until ctx is done.
 type Batcher struct {
-	client   client.IngestClient
+	clientFn IngestClientProvider
 	log      logr.Logger
 	resource ResourceProvider
 	agent    AgentProvider
@@ -104,10 +110,12 @@ func WithMaxBatchSize(n int) Option {
 }
 
 // NewBatcher constructs a Batcher. resource and agent producers are called
-// at flush time to build the outgoing IngestBatch envelope.
-func NewBatcher(c client.IngestClient, resource ResourceProvider, agent AgentProvider, log logr.Logger, opts ...Option) *Batcher {
-	if c == nil {
-		panic("batch.NewBatcher: client must not be nil")
+// at flush time to build the outgoing IngestBatch envelope. clientFn is
+// called on every flush to resolve the active ingest client; this enables
+// hot-rotation of API credentials without recreating the Batcher.
+func NewBatcher(clientFn IngestClientProvider, resource ResourceProvider, agent AgentProvider, log logr.Logger, opts ...Option) *Batcher {
+	if clientFn == nil {
+		panic("batch.NewBatcher: clientFn must not be nil")
 	}
 	if resource == nil {
 		panic("batch.NewBatcher: resource provider must not be nil")
@@ -116,7 +124,7 @@ func NewBatcher(c client.IngestClient, resource ResourceProvider, agent AgentPro
 		panic("batch.NewBatcher: agent provider must not be nil")
 	}
 	b := &Batcher{
-		client:        c,
+		clientFn:      clientFn,
 		log:           log,
 		resource:      resource,
 		agent:         agent,
@@ -229,7 +237,7 @@ func (b *Batcher) flushNow(ctx context.Context) error {
 	metrics.FlushBatchSize.Observe(float64(len(events)))
 
 	start := time.Now()
-	res, err := b.client.Flush(ctx, batch)
+	res, err := b.clientFn().Flush(ctx, batch)
 	metrics.FlushLatencySeconds.Observe(time.Since(start).Seconds())
 
 	if err != nil {

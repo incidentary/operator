@@ -59,15 +59,20 @@ const (
 	ReconcilerMaxBackoff = 30 * time.Minute
 )
 
+// ServicesClientProvider returns the active services-list client at call
+// time. Resolved on every poll so credential rotation takes effect
+// immediately.
+type ServicesClientProvider func() ingestclient.ServicesClient
+
 // Reconciler classifies discovered workloads against the registered services
 // list and surfaces mismatches via logs and CRD status. It runs in the same
 // LeaderElectionRunnable as the discovery Loop (registered separately).
 type Reconciler struct {
-	client   client.Reader
-	loop     *Loop
-	services ingestclient.ServicesClient
-	log      logr.Logger
-	interval time.Duration
+	client     client.Reader
+	loop       *Loop
+	servicesFn ServicesClientProvider
+	log        logr.Logger
+	interval   time.Duration
 
 	matchedGauge    atomic.Int32
 	ghostGauge      atomic.Int32
@@ -79,20 +84,21 @@ type Reconciler struct {
 	currentBackoff time.Duration
 }
 
-// NewReconciler constructs a Reconciler. services is the services-list
-// client; loop is the discovery Loop the reconciler runs alongside.
+// NewReconciler constructs a Reconciler. servicesFn returns the active
+// services-list client; loop is the discovery Loop the reconciler runs
+// alongside.
 func NewReconciler(
 	c client.Reader,
 	loop *Loop,
-	services ingestclient.ServicesClient,
+	servicesFn ServicesClientProvider,
 	log logr.Logger,
 	interval time.Duration,
 ) *Reconciler {
 	if c == nil {
 		panic("discovery.NewReconciler: client must not be nil")
 	}
-	if services == nil {
-		panic("discovery.NewReconciler: services must not be nil")
+	if servicesFn == nil {
+		panic("discovery.NewReconciler: servicesFn must not be nil")
 	}
 	if interval <= 0 {
 		interval = DefaultInterval
@@ -100,7 +106,7 @@ func NewReconciler(
 	return &Reconciler{
 		client:         c,
 		loop:           loop,
-		services:       services,
+		servicesFn:     servicesFn,
 		log:            log,
 		interval:       interval,
 		currentBackoff: interval,
@@ -154,7 +160,7 @@ func (r *Reconciler) runOnce(ctx context.Context) error {
 		metrics.ReconciliationDurationSeconds.Observe(time.Since(start).Seconds())
 	}()
 
-	registered, err := r.services.List(ctx)
+	registered, err := r.servicesFn().List(ctx)
 	if err != nil {
 		return fmt.Errorf("reconciler: list services: %w", err)
 	}

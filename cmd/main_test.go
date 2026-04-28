@@ -149,7 +149,7 @@ func newTestPipeline(t *testing.T) (*pipelineHandler, *batch.Batcher) {
 	rec := &recordingClient{}
 	resource := func() wireformat.Resource { return wireformat.Resource{Attributes: map[string]string{}} }
 	agent := func() wireformat.Agent { return wireformat.Agent{Type: wireformat.AgentTypeK8sOperator} }
-	b := batch.NewBatcher(rec, resource, agent, log.Log.WithName("test"))
+	b := batch.NewBatcher(func() ingestclient.IngestClient { return rec }, resource, agent, log.Log.WithName("test"))
 
 	h := &pipelineHandler{
 		mapper:  mpr,
@@ -211,7 +211,7 @@ func TestPipelineHandler_EmitFilteredEventNotEnqueued(t *testing.T) {
 	rec := &recordingClient{}
 	resource := func() wireformat.Resource { return wireformat.Resource{Attributes: map[string]string{}} }
 	agent := func() wireformat.Agent { return wireformat.Agent{Type: wireformat.AgentTypeK8sOperator} }
-	b := batch.NewBatcher(rec, resource, agent, log.Log.WithName("test"))
+	b := batch.NewBatcher(func() ingestclient.IngestClient { return rec }, resource, agent, log.Log.WithName("test"))
 
 	h := &pipelineHandler{
 		mapper:  mpr,
@@ -318,7 +318,7 @@ func TestPipelineHandler_EmitRecoversPanic(t *testing.T) {
 	rec := &recordingClient{}
 	resource := func() wireformat.Resource { return wireformat.Resource{Attributes: map[string]string{}} }
 	agent := func() wireformat.Agent { return wireformat.Agent{Type: wireformat.AgentTypeK8sOperator} }
-	b := batch.NewBatcher(rec, resource, agent, log.Log.WithName("test"))
+	b := batch.NewBatcher(func() ingestclient.IngestClient { return rec }, resource, agent, log.Log.WithName("test"))
 
 	h := &pipelineHandler{
 		mapper:  &panicingMapper{},

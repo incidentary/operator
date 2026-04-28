@@ -48,12 +48,16 @@ var DefaultExcludedNamespaces = map[string]bool{
 	"kube-node-lease": true,
 }
 
+// TopologyClientProvider returns the active topology client at call time.
+// Resolved on every report so credential rotation takes effect immediately.
+type TopologyClientProvider func() ingestclient.TopologyClient
+
 // Loop is a controller-runtime Runnable that periodically scans the cluster
 // for workloads and sends a topology report to the Incidentary API.
 type Loop struct {
 	client         client.Reader
 	resolver       *identity.Resolver
-	topology       ingestclient.TopologyClient
+	topologyFn     TopologyClientProvider
 	log            logr.Logger
 	clusterName    string
 	interval       time.Duration
@@ -70,11 +74,13 @@ type Options struct {
 }
 
 // NewLoop constructs a discovery Loop. client is typically the manager's
-// cached reader; resolver uses the same cache.
+// cached reader; resolver uses the same cache. topologyFn is called on every
+// reporting cycle to resolve the active topology client, supporting hot
+// rotation of API credentials without recreating the Loop.
 func NewLoop(
 	c client.Reader,
 	resolver *identity.Resolver,
-	topology ingestclient.TopologyClient,
+	topologyFn TopologyClientProvider,
 	log logr.Logger,
 	opts Options,
 ) *Loop {
@@ -84,8 +90,8 @@ func NewLoop(
 	if resolver == nil {
 		panic("discovery.NewLoop: resolver must not be nil")
 	}
-	if topology == nil {
-		panic("discovery.NewLoop: topology must not be nil")
+	if topologyFn == nil {
+		panic("discovery.NewLoop: topologyFn must not be nil")
 	}
 
 	interval := opts.Interval
@@ -102,7 +108,7 @@ func NewLoop(
 	l := &Loop{
 		client:      c,
 		resolver:    resolver,
-		topology:    topology,
+		topologyFn:  topologyFn,
 		log:         log,
 		clusterName: opts.ClusterName,
 		interval:    interval,
@@ -171,7 +177,7 @@ func (l *Loop) runOnce(ctx context.Context) error {
 		ObservedAt:  time.Now().UnixNano(),
 		Workloads:   workloads,
 	}
-	res, err := l.topology.Report(ctx, report)
+	res, err := l.topologyFn().Report(ctx, report)
 	if err != nil {
 		return err
 	}
