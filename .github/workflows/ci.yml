@@ -27,6 +27,9 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Integration tests (envtest)
+        run: make test-integration
+
       - name: Build
         run: make build
 
