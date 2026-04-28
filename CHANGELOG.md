@@ -10,6 +10,13 @@ are clearly flagged below.
 
 ## [Unreleased]
 
+_Nothing yet — open a PR._
+
+## [0.1.0] - 2026-04-28
+
+First tagged preview release. Alpha-quality: the wire format is stable
+but the CRD schema may break in subsequent minor versions.
+
 ### Breaking
 
 - **`spec.workspaceId` is now a required field on the `IncidentaryConfig`
@@ -233,5 +240,7 @@ are clearly flagged below.
   `flush_batch_size`, `informer_cache_size`, `leader_is_leader`, plus
   the discovery / reconciler gauges.
 
-<!-- Compare links will be added once the first version tag is cut. -->
+[Unreleased]: https://github.com/incidentary/operator/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/incidentary/operator/releases/tag/v0.1.0
+
 
