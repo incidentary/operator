@@ -338,6 +338,77 @@ func TestPipelineHandler_EmitRecoversPanic(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
+// parseStringSliceEnv
+// ----------------------------------------------------------------------------
+
+func TestParseStringSliceEnv_CommaSeparated(t *testing.T) {
+	t.Setenv("TEST_NS_LIST", "kube-system,kube-public,kube-node-lease")
+	got := parseStringSliceEnv("TEST_NS_LIST")
+	want := []string{"kube-system", "kube-public", "kube-node-lease"}
+	if !equalStrings(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestParseStringSliceEnv_EmptyReturnsNil(t *testing.T) {
+	t.Setenv("TEST_NS_EMPTY", "")
+	got := parseStringSliceEnv("TEST_NS_EMPTY")
+	if got != nil {
+		t.Errorf("got %v, want nil for empty env var", got)
+	}
+}
+
+func TestParseStringSliceEnv_TrimsWhitespace(t *testing.T) {
+	t.Setenv("TEST_NS_WS", " ns1 , ns2 , ns3 ")
+	got := parseStringSliceEnv("TEST_NS_WS")
+	want := []string{"ns1", "ns2", "ns3"}
+	if !equalStrings(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestParseStringSliceEnv_FiltersBlankEntries(t *testing.T) {
+	// Trailing/leading commas and double commas should not produce empty strings.
+	t.Setenv("TEST_NS_BLANK", ",ns1,,ns2,")
+	got := parseStringSliceEnv("TEST_NS_BLANK")
+	want := []string{"ns1", "ns2"}
+	if !equalStrings(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestParseStringSliceEnv_OnlyWhitespaceReturnsNil(t *testing.T) {
+	t.Setenv("TEST_NS_ONLYWS", "   ")
+	got := parseStringSliceEnv("TEST_NS_ONLYWS")
+	if got != nil {
+		t.Errorf("got %v, want nil for whitespace-only env var", got)
+	}
+}
+
+func TestParseStringSliceEnv_SingleValue(t *testing.T) {
+	t.Setenv("TEST_NS_SINGLE", "kube-system")
+	got := parseStringSliceEnv("TEST_NS_SINGLE")
+	want := []string{"kube-system"}
+	if !equalStrings(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// equalStrings is a small slice-equality helper to avoid pulling in reflect
+// or testify just for these tests.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// ----------------------------------------------------------------------------
 // zap.Options default
 // ----------------------------------------------------------------------------
 

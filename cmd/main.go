@@ -24,6 +24,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -175,6 +176,29 @@ func getEnvOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseStringSliceEnv reads a comma-separated env var into a string slice.
+// Returns nil (not an empty slice) when the var is unset, blank, or contains
+// only whitespace so callers can distinguish "not configured" from
+// "explicitly configured empty". Whitespace around each element is trimmed
+// and blank entries are dropped, so " ns1 , , ns2 " yields ["ns1", "ns2"].
+func parseStringSliceEnv(key string) []string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // parseDurationEnv reads an integer-seconds duration from an environment
@@ -451,14 +475,16 @@ func main() {
 	}
 
 	reconciliationInterval := parseDurationEnv("INCIDENTARY_RECONCILIATION_INTERVAL_SECONDS", 300*time.Second)
+	excludeNamespaces := parseStringSliceEnv("INCIDENTARY_EXCLUDE_NAMESPACES")
 	discoveryLoop := discovery.NewLoop(
 		mgr.GetClient(),
 		resolver,
 		topologyClient,
 		ctrl.Log.WithName("discovery"),
 		discovery.Options{
-			ClusterName: clusterName,
-			Interval:    reconciliationInterval,
+			ClusterName:       clusterName,
+			Interval:          reconciliationInterval,
+			ExcludeNamespaces: excludeNamespaces,
 		},
 	)
 	if err := mgr.Add(discoveryLoop); err != nil {

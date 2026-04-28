@@ -87,6 +87,10 @@ resources:
     cpu: 100m
     memory: 256Mi
   limits:
+    # CPU limit prevents an event-storm or initial cache sync from saturating
+    # node CPU and starving co-located workloads. 500m gives ~5x burst headroom
+    # over the steady-state working set (10–30m at idle, up to 200m during sync).
+    cpu: 500m
     memory: 512Mi
 
 nodeSelector: {}
@@ -103,7 +107,17 @@ serviceAccount:
   annotations: {}
 
 # -----------------------------------------------------------------------------
-# Health probes.
+# Health probes and metrics.
 # -----------------------------------------------------------------------------
 healthProbeBindAddress: ":8081"
-metricsBindAddress: "0"
+
+# Metrics server bind address. ":8080" enables Prometheus scraping over plain
+# HTTP (default — no cert-manager dependency, scrape-friendly out of the box).
+# Set to "0" to disable, or to ":8443" with metricsSecure=true for mTLS.
+metricsBindAddress: ":8080"
+
+# Serve metrics over HTTPS. When false, the manager exposes /metrics on
+# metricsBindAddress as plain HTTP — appropriate for in-cluster scraping over
+# a private network. Set to true and provide a certificate via metricsCertPath
+# for production scrapers that require TLS.
+metricsSecure: false

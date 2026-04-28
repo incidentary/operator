@@ -42,6 +42,7 @@ spec:
             - "--leader-elect=true"
             - "--health-probe-bind-address={{ .Values.healthProbeBindAddress }}"
             - "--metrics-bind-address={{ .Values.metricsBindAddress }}"
+            - "--metrics-secure={{ .Values.metricsSecure }}"
           env:
             - name: INCIDENTARY_API_KEY
               valueFrom:
@@ -60,6 +61,12 @@ spec:
                   fieldPath: metadata.namespace
             - name: INCIDENTARY_RECONCILIATION_INTERVAL_SECONDS
               value: {{ .Values.config.reconciliationIntervalSeconds | quote }}
+            - name: INCIDENTARY_MIN_SEVERITY
+              value: {{ .Values.config.eventFilters.minSeverity | quote }}
+            {{- with .Values.config.excludeNamespaces }}
+            - name: INCIDENTARY_EXCLUDE_NAMESPACES
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- if .Values.config.ingestEndpoint }}
             - name: INCIDENTARY_INGEST_ENDPOINT
               value: {{ .Values.config.ingestEndpoint | quote }}
