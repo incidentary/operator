@@ -42,28 +42,67 @@ One-command install:
 helm install incidentary oci://ghcr.io/incidentary/charts/operator \
   --namespace incidentary-system --create-namespace \
   --set apiKey=sk_live_... \
+  --set workspaceId=ws_... \
   --set cluster.name=prod-us-east-1
 ```
 
-The chart requires exactly one value: `apiKey`. Everything else has
-sensible defaults documented in `charts/incidentary-operator/values.yaml`.
+The chart requires two values: `apiKey` and `workspaceId`. Everything
+else has sensible defaults documented in
+`charts/incidentary-operator/values.yaml`. Installing without
+`workspaceId` while `apiKey` is set fails fast at `helm install` time —
+the server rejects every batch with `WORKSPACE_MISMATCH (422)` so we
+prevent the misconfigured operator from ever starting.
 
 Installing a locally-built chart during development:
 
 ```bash
 helm install incidentary ./charts/incidentary-operator \
   --namespace incidentary-system --create-namespace \
-  --set apiKey=dev-key --set image.tag=dev --set image.pullPolicy=Never
+  --set apiKey=dev-key --set workspaceId=ws_dev \
+  --set image.tag=dev --set image.pullPolicy=Never
 ```
+
+## Recent changes
+
+The chart is still on `0.1.0` (alpha). The following changes have landed
+since the first preview cut and may affect anyone running an older
+checkout. See [CHANGELOG.md](./CHANGELOG.md) for the full list.
+
+**Breaking — required configuration:**
+
+1. `workspaceId` is now required in both Helm values and the
+   `IncidentaryConfig` CR (`spec.workspaceId`, `MinLength=1`). The chart
+   fails fast at `helm install` time when `apiKey` is set without a
+   matching `workspaceId`. CRs without `workspaceId` are rejected at
+   `kubectl apply`.
+
+**Additive (no action required):**
+
+- API key rotation works without a pod restart. Edit the referenced
+  Secret data; the controller re-reads it and atomically swaps clients.
+- Default logging is production-mode JSON with stacktraces only at
+  Error level. Pass `--zap-devel=true` for verbose dev-mode output.
+- Metrics endpoint is exposed on `:8080` (HTTP) by default. Set
+  `metricsBindAddress: "0"` in values.yaml to disable, or
+  `metricsSecure: true` to enable mTLS.
+- Default CPU limit (`500m`) prevents node-level resource pressure
+  under event storms.
+- `INCIDENTARY_MIN_SEVERITY` and `INCIDENTARY_EXCLUDE_NAMESPACES` are
+  now wired through to the running container (they were documented in
+  values.yaml but had no effect in earlier builds).
 
 ## Configuration reference
 
 | Helm value | CRD field | Env var | Default |
 |------------|-----------|---------|---------|
 | `apiKey` | `apiKeySecretRef` | `INCIDENTARY_API_KEY` | — (required) |
+| `workspaceId` | `workspaceId` | `INCIDENTARY_WORKSPACE_ID` | — (required) |
 | `cluster.name` | — | `K8S_CLUSTER_NAME` | `unknown` |
 | `config.reconciliationIntervalSeconds` | `reconciliationIntervalSeconds` | `INCIDENTARY_RECONCILIATION_INTERVAL_SECONDS` | `300` |
-| `config.eventFilters.minSeverity` | `eventFilters.minSeverity` | — | `warning` |
+| `config.eventFilters.minSeverity` | `eventFilters.minSeverity` | `INCIDENTARY_MIN_SEVERITY` | `warning` |
+| `config.excludeNamespaces` | `excludeNamespaces` | `INCIDENTARY_EXCLUDE_NAMESPACES` | `kube-system,kube-public,kube-node-lease` |
+| `metricsBindAddress` | — | — | `:8080` |
+| `metricsSecure` | — | — | `false` |
 | `config.ingestEndpoint` | `ingestEndpoint` | `INCIDENTARY_INGEST_ENDPOINT` | `https://api.incidentary.com/api/v2/ingest` |
 | `config.topologyEndpoint` | `topologyEndpoint` | `INCIDENTARY_TOPOLOGY_ENDPOINT` | `https://api.incidentary.com/api/v2/workspace/topology` |
 | `config.servicesEndpoint` | — | `INCIDENTARY_SERVICES_ENDPOINT` | `https://api.incidentary.com/api/v2/workspace/services` |
