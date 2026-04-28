@@ -17,26 +17,19 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"flag"
-	"fmt"
 	"os"
-	"runtime/debug"
-	"strconv"
-	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -52,7 +45,6 @@ import (
 	"github.com/incidentary/operator/internal/identity"
 	"github.com/incidentary/operator/internal/informers"
 	"github.com/incidentary/operator/internal/mapper"
-	opmetrics "github.com/incidentary/operator/internal/metrics"
 	"github.com/incidentary/operator/internal/wireformat"
 	// +kubebuilder:scaffold:imports
 )
@@ -71,165 +63,6 @@ func init() {
 	utilruntime.Must(informers.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
-
-// pipelineHandler is the Phase-3 informers.Handler that routes cluster events
-// through the mapper and enqueues the resulting wire format events on the
-// batcher. Unknown object types produce no events (the mapper returns an
-// empty slice).
-type pipelineHandler struct {
-	mapper  mapper.Dispatcher
-	filter  filter.Filter
-	batcher *batch.Batcher
-	log     logr.Logger
-}
-
-func (h *pipelineHandler) OnAdd(ctx context.Context, obj client.Object) {
-	h.emit(ctx, nil, obj)
-}
-
-func (h *pipelineHandler) OnUpdate(ctx context.Context, oldObj, newObj client.Object) {
-	h.emit(ctx, oldObj, newObj)
-}
-
-func (h *pipelineHandler) OnDelete(ctx context.Context, obj client.Object) {
-	h.emit(ctx, obj, nil)
-}
-
-func (h *pipelineHandler) emit(ctx context.Context, oldObj, newObj client.Object) {
-	defer func() {
-		if r := recover(); r != nil {
-			h.log.Error(fmt.Errorf("%v", r), "mapper dispatch panicked; dropping event",
-				"stack", string(debug.Stack()))
-		}
-	}()
-	events, err := h.mapper.Dispatch(ctx, oldObj, newObj)
-	if err != nil {
-		h.log.Error(err, "mapper dispatch failed")
-		return
-	}
-	if len(events) == 0 {
-		return
-	}
-
-	// Apply Philosophy 1 severity filter.
-	accepted := events[:0]
-	for _, ev := range events {
-		if h.filter.Accept(ev) {
-			accepted = append(accepted, ev)
-		} else {
-			tier := "tier2"
-			if filter.IsTier1(ev.Kind) {
-				tier = "tier1"
-			}
-			opmetrics.EventsFilteredTotal.WithLabelValues(tier).Inc()
-		}
-	}
-	if len(accepted) == 0 {
-		return
-	}
-	h.batcher.Enqueue(accepted...)
-}
-
-// buildInitialProvider constructs a client.Provider seeded with bootstrap
-// credentials from environment variables. The IncidentaryConfigReconciler
-// will Rotate() this Provider on every successful reconciliation, replacing
-// these initial clients with whatever the CR-referenced Secret contains.
-//
-// When apiKey is empty, the Provider is seeded with dropping stubs so the
-// operator runs in a no-op state until the controller reconciles a CR.
-func buildInitialProvider(
-	apiKey, workspaceID, ingestEP, topologyEP, servicesEP string,
-	log logr.Logger,
-) *ingestclient.Provider {
-	// Construct with valid clients first (NewProvider rejects nil).
-	p := ingestclient.NewProvider(
-		ingestclient.NewHTTPClient("bootstrap", ingestclient.WithEndpoint(ingestEP)),
-		ingestclient.NewTopologyClient("bootstrap", ingestclient.WithTopologyEndpoint(topologyEP)),
-		ingestclient.NewServicesClient("bootstrap", ingestclient.WithServicesEndpoint(servicesEP)),
-	)
-	// Then immediately Rotate to the actual configuration. When apiKey is
-	// empty this installs dropping stubs; otherwise it installs real HTTP
-	// clients with the configured key. Either way the bootstrap clients
-	// above are discarded before any flush can happen.
-	p.Rotate(apiKey, workspaceID, ingestEP, topologyEP, servicesEP, log)
-	return p
-}
-
-// getEnvOrDefault returns the value of an environment variable or fallback
-// when unset or empty.
-func getEnvOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// parseStringSliceEnv reads a comma-separated env var into a string slice.
-// Returns nil (not an empty slice) when the var is unset, blank, or contains
-// only whitespace so callers can distinguish "not configured" from
-// "explicitly configured empty". Whitespace around each element is trimmed
-// and blank entries are dropped, so " ns1 , , ns2 " yields ["ns1", "ns2"].
-func parseStringSliceEnv(key string) []string {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return nil
-	}
-	parts := strings.Split(v, ",")
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if trimmed := strings.TrimSpace(p); trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
-}
-
-// parseDurationEnv reads an integer-seconds duration from an environment
-// variable, falling back to the supplied default when unset or invalid.
-func parseDurationEnv(key string, fallback time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	secs, err := strconv.Atoi(v)
-	if err != nil || secs <= 0 {
-		return fallback
-	}
-	return time.Duration(secs) * time.Second
-}
-
-// warnIfMisconfigured returns true when an API key is set without a matching
-// workspace ID. In that state the ingest server will reject every batch with
-// 422 WORKSPACE_MISMATCH, silently discarding all events. The caller is
-// responsible for logging; this function has no side effects.
-func warnIfMisconfigured(apiKey, workspaceID string) bool {
-	return apiKey != "" && workspaceID == ""
-}
-
-// warnIfClusterNameUnset returns true when the cluster name has not been
-// explicitly configured. §5.1 of wire format v2 requires k8s.cluster.name
-// for k8s_operator agents; sending the placeholder "unknown" is technically
-// compliant but makes cluster-level correlation meaningless in the backend.
-func warnIfClusterNameUnset(clusterName string) bool {
-	return clusterName == "" || clusterName == "unknown"
-}
-
-// leaderMetricRunnable sets incidentary_operator_leader_is_leader to 1 when
-// this instance becomes the leader and back to 0 on shutdown. It implements
-// LeaderElectionRunnable so it only runs on the elected leader.
-type leaderMetricRunnable struct{}
-
-func (leaderMetricRunnable) Start(ctx context.Context) error {
-	opmetrics.LeaderIsLeader.Set(1)
-	<-ctx.Done()
-	opmetrics.LeaderIsLeader.Set(0)
-	return nil
-}
-
-func (leaderMetricRunnable) NeedLeaderElection() bool { return true }
 
 // nolint:gocyclo
 func main() {
@@ -323,11 +156,6 @@ func main() {
 	// If the certificate is not specified, controller-runtime will automatically
 	// generate self-signed certificates for the metrics server. While convenient for development and testing,
 	// this setup is not recommended for production.
-	//
-	// TODO(user): If you enable certManager, uncomment the following lines:
-	// - [METRICS-WITH-CERTS] at config/default/kustomization.yaml to generate and use certificates
-	// managed by cert-manager for the metrics server.
-	// - [PROMETHEUS-WITH-CERTS] at config/prometheus/kustomization.yaml for TLS certification.
 	if len(metricsCertPath) > 0 {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
 			"metrics-cert-path", metricsCertPath, "metrics-cert-name", metricsCertName, "metrics-cert-key", metricsCertKey)
@@ -344,17 +172,6 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "140b099f.incidentary.com",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "Failed to start manager")
@@ -491,6 +308,7 @@ func main() {
 		os.Exit(1)
 	}
 	reconciler.Classifier = reconcilerLoop
+
 	// LeaderIsLeader metric: a trivial runnable that sets the gauge to 1 when
 	// the manager elects this instance and back to 0 on context cancellation.
 	if err := mgr.Add(&leaderMetricRunnable{}); err != nil {
