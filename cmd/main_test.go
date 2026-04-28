@@ -12,6 +12,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -332,5 +334,34 @@ func TestPipelineHandler_EmitRecoversPanic(t *testing.T) {
 	// Buffer must be empty (panic was recovered, no events enqueued).
 	if b.BufferSize() != 0 {
 		t.Errorf("expected 0 events after panic recovery, got %d", b.BufferSize())
+	}
+}
+
+// ----------------------------------------------------------------------------
+// zap.Options default
+// ----------------------------------------------------------------------------
+
+// TestZapDevelopmentDefaultIsFalse pins the zap.Options.Development default
+// to false. Development=true makes zap attach a full goroutine stacktrace to
+// every Warn-level log message, which floods structured log pipelines and
+// produces unreadable production logs. Users who want dev-mode logging during
+// debugging can pass --zap-devel=true at runtime.
+//
+// This is a regression test against the kubebuilder scaffold default.
+func TestZapDevelopmentDefaultIsFalse(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(src)
+
+	if strings.Contains(source, "Development: true") {
+		t.Errorf("cmd/main.go must not set zap.Options{Development: true} — " +
+			"this enables verbose dev-mode logging in production by default. " +
+			"Use Development: false; users can opt in via --zap-devel=true.")
+	}
+	if !strings.Contains(source, "Development: false") {
+		t.Errorf("cmd/main.go should explicitly set zap.Options{Development: false} " +
+			"so the production default is unambiguous.")
 	}
 }
