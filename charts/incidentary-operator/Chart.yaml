@@ -1,0 +1,20 @@
+apiVersion: v2
+name: incidentary-operator
+description: |
+  Kubernetes operator for Incidentary. Watches cluster-level resources
+  (pods, events, deployments, HPAs, nodes, and more) and reports
+  infrastructure telemetry to the Incidentary v2 ingest API.
+type: application
+version: 0.1.1
+appVersion: "0.1.1"
+home: https://incidentary.com
+sources:
+  - https://github.com/incidentary/operator
+keywords:
+  - incidentary
+  - observability
+  - incident-response
+  - kubernetes-operator
+maintainers:
+  - name: Incidentary
+    url: https://incidentary.com

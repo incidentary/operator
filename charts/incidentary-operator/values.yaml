@@ -1,0 +1,256 @@
+# Incidentary operator Helm chart values.
+#
+# The only REQUIRED value is apiKey. Everything else has sensible defaults.
+#
+# RECOMMENDED install (uses an existing Secret you create separately):
+#
+#   kubectl create namespace incidentary-system
+#   kubectl create secret generic incidentary-api-key \
+#     --namespace=incidentary-system \
+#     --from-literal=token="$(cat ./api-key.txt)"
+#   helm install incidentary oci://ghcr.io/incidentary/charts/operator \
+#     --namespace incidentary-system \
+#     --set existingSecretName=incidentary-api-key \
+#     --set workspaceId=ws_...
+#
+# QUICK install (NOT for production):
+#
+#   helm install incidentary oci://ghcr.io/incidentary/operator/charts/incidentary-operator \
+#     --namespace incidentary-system --create-namespace \
+#     --set apiKey=sk_live_...
+#
+# Note: `--set apiKey=` records the key in `helm get values <release>`
+# (cluster-readable to anyone with chart read permission) AND in your
+# shell history AND in any CI/CD logs that echoed the install command.
+# For production deployments use `existingSecretName` and create the
+# Secret out-of-band so the token never enters a Helm release
+# manifest. If you must use `--set apiKey=`, prefer the file-piped
+# form:
+#
+#   helm install ... --set-string apiKey="$(cat ./api-key.txt)"
+#
+# -----------------------------------------------------------------------------
+
+# apiKey is the Incidentary workspace API key. REQUIRED unless
+# existingSecretName is set.
+# Stored in a Kubernetes Secret, referenced by the IncidentaryConfig CR.
+# See the production-deployment note above.
+apiKey: ""
+
+# workspaceId is the Incidentary workspace identifier. REQUIRED alongside apiKey.
+# This value is not a secret — it is embedded in every ingest batch as
+# agent.workspace_id and the server uses it to route batches to the correct
+# tenant. Without it, every batch is rejected with WORKSPACE_MISMATCH (422).
+workspaceId: ""
+
+# existingSecretName — use a pre-existing Secret instead of creating one from
+# the apiKey value. When set, apiKey is ignored.
+existingSecretName: ""
+
+# existingSecretKey — the key within the existing Secret that holds the API
+# token. Defaults to "token" when unset.
+existingSecretKey: "token"
+
+# -----------------------------------------------------------------------------
+# Key rotation workflow.
+#
+# The operator's controller watches the API-key Secret and hot-swaps the
+# in-memory key on every reconcile. The pod template intentionally does NOT
+# carry a `checksum/secret` annotation, so Secret rotation does NOT trigger
+# a rolling restart — see test/helm/key-rotation-no-restart.sh.
+#
+# `keyRotation.workflow` documents the operator-recommended workflow. It
+# is purely informational at the chart level — it does not change runtime
+# behavior. Set to `helm-upgrade` if your platform team prefers the legacy
+# workflow (helm upgrade with a new --set apiKey value).
+# -----------------------------------------------------------------------------
+keyRotation:
+  # Recommended workflow:
+  #   secret-on-reconcile  -- the operator picks up Secret data changes
+  #                            without pod restart (default)
+  #   helm-upgrade         -- full chart upgrade on every key rotation
+  #                            (legacy fallback; restarts both replicas)
+  workflow: secret-on-reconcile
+
+# Number of operator replicas. Two replicas with leader election gives
+# hot-standby failover. Minimum 1, maximum 2.
+replicaCount: 2
+
+image:
+  repository: ghcr.io/incidentary/operator
+  # tag defaults to .Chart.AppVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# -----------------------------------------------------------------------------
+# Operator configuration — maps to IncidentaryConfig spec fields.
+# -----------------------------------------------------------------------------
+config:
+  # Namespaces the operator scans. Empty = all namespaces except excluded.
+  watchNamespaces: []
+
+  # Namespaces explicitly excluded from scanning.
+  excludeNamespaces:
+    - kube-system
+    - kube-public
+    - kube-node-lease
+
+  # How often the operator re-discovers workloads and sends topology reports.
+  reconciliationIntervalSeconds: 300
+
+  # Event filter. Tier 1 events (crashes, OOMs, failures, deploys) always
+  # pass regardless of this threshold.
+  eventFilters:
+    minSeverity: warning
+
+  # Override the default ingest endpoint (advanced).
+  ingestEndpoint: ""
+
+  # Override the default topology endpoint (advanced).
+  topologyEndpoint: ""
+
+  # Override the default services-list endpoint (advanced). The reconciler
+  # polls this to learn which services are SDK-registered.
+  servicesEndpoint: ""
+
+# -----------------------------------------------------------------------------
+# Cluster identification — set by the operator's resource block.
+# -----------------------------------------------------------------------------
+cluster:
+  # Human-readable cluster name, used as resource.k8s.cluster.name.
+  # Strongly recommended — defaults to "unknown" when empty.
+  name: ""
+
+# -----------------------------------------------------------------------------
+# Deployment — resource limits, node scheduling, security.
+# -----------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    # CPU limit prevents an event-storm or initial cache sync from saturating
+    # node CPU and starving co-located workloads. 500m gives ~5x burst headroom
+    # over the steady-state working set (10–30m at idle, up to 200m during sync).
+    cpu: 500m
+    memory: 512Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+podLabels: {}
+podAnnotations: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Health probes and metrics.
+# -----------------------------------------------------------------------------
+healthProbeBindAddress: ":8081"
+
+# Metrics server bind address. ":8080" enables Prometheus scraping over plain
+# HTTP (default — no cert-manager dependency, scrape-friendly out of the box).
+# Set to "0" to disable, or to ":8443" with metricsSecure=true for mTLS.
+metricsBindAddress: ":8080"
+
+# Serve metrics over HTTPS. When false, the manager exposes /metrics on
+# metricsBindAddress as plain HTTP — appropriate for in-cluster scraping over
+# a private network. Set to true and provide a certificate via metricsCertPath
+# for production scrapers that require TLS.
+#
+# When `metricsSecure: false`, deploy this chart with
+# `networkPolicy.allowPrometheusScrape: true` AND
+# `networkPolicy.prometheusFrom` scoped to your Prometheus pod
+# selector. Otherwise any in-cluster pod can scrape `:8080` and
+# enumerate the workload-classification gauges, leaking topology
+# reconnaissance to a low-privilege attacker.
+metricsSecure: false
+
+# -----------------------------------------------------------------------------
+# NetworkPolicy — OFF BY DEFAULT.
+#
+# Renders a NetworkPolicy that restricts the operator pod's egress to:
+#   - DNS (CoreDNS UDP/TCP 53)
+#   - Kubernetes API server
+#   - Configurable Incidentary backend hostnames (egressTo)
+#
+# Enable this only on clusters running a NetworkPolicy-aware CNI (Calico,
+# Cilium, Antrea, etc.). Without such a CNI, NetworkPolicy resources are
+# silently ignored — they do not break the install, but they also don't
+# enforce anything.
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+
+  # When set, narrows the egress allow-list. Each entry is a Kubernetes
+  # NetworkPolicyPeer + a list of NetworkPolicyPort. Use this to restrict
+  # the operator's outbound TLS to your specific Incidentary endpoint.
+  # Example:
+  #   egressTo:
+  #     - to:
+  #         - ipBlock:
+  #             cidr: 1.2.3.4/32
+  #       ports:
+  #         - protocol: TCP
+  #           port: 443
+  egressTo: []
+
+  # When set, restricts the kube-apiserver egress rule to specific
+  # CIDRs (the control-plane node IPs) using an `ipBlock` peer instead
+  # of a namespace selector. This removes the operator's TLS reach to
+  # in-cluster pods entirely; without this, the default rule lets the
+  # operator dial TCP/443 to any pod in `kube-system` (a much smaller
+  # surface than before, but still broader than the apiserver alone).
+  # Example for a typical AWS EKS cluster:
+  #   apiServerCidrs:
+  #     - "10.0.0.0/19"   # private subnet that hosts the control plane
+  apiServerCidrs: []
+
+  # Allow Prometheus scrape on the metrics port (8080 by default).
+  allowPrometheusScrape: false
+
+  # Selector for the Prometheus pod that will scrape the operator metrics.
+  # Standard kube-prometheus-stack default selector shown.
+  prometheusFrom:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+
+  # Metrics port to open in the ingress rule above. Should match
+  # metricsBindAddress.
+  metricsPort: 8080
+
+# -----------------------------------------------------------------------------
+# ServiceMonitor — OFF BY DEFAULT.
+#
+# Renders a Prometheus Operator ServiceMonitor pointing at the operator's
+# metrics endpoint (default :8080/metrics).
+#
+# Enable this only on clusters running the prometheus-operator (the CRDs
+# under monitoring.coreos.com/v1 must already be installed). On clusters
+# without prometheus-operator, helm install fails on this resource — set
+# enabled=false (the default) and rely on direct Prometheus scrape config
+# or any other scrape mechanism.
+# -----------------------------------------------------------------------------
+serviceMonitor:
+  enabled: false
+  # Optional override for the namespace where the ServiceMonitor is created
+  # (defaults to .Release.Namespace).
+  namespace: ""
+  # Scrape interval; matches kube-prometheus-stack default.
+  interval: 30s
+  scrapeTimeout: 10s
+  # Skip TLS verify when metricsSecure=true with a self-signed cert.
+  tlsInsecureSkipVerify: false
+  # Additional labels (Prometheus operator commonly requires `release: <prom-stack>`).
+  additionalLabels: {}

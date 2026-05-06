@@ -1,0 +1,538 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+*/
+
+package discovery
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/go-logr/logr/testr"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	ingestclient "github.com/incidentary/operator/internal/client"
+	"github.com/incidentary/operator/internal/identity"
+)
+
+// topoFn wraps a concrete TopologyClient in a TopologyClientProvider closure
+// for tests; production callers pass provider.Topology directly.
+func topoFn(t ingestclient.TopologyClient) TopologyClientProvider {
+	return func() ingestclient.TopologyClient { return t }
+}
+
+type fakeTopology struct {
+	reports []*ingestclient.TopologyReport
+	err     error
+}
+
+func (f *fakeTopology) Report(_ context.Context, r *ingestclient.TopologyReport) (*ingestclient.TopologyResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.reports = append(f.reports, r)
+	return &ingestclient.TopologyResponse{
+		Accepted:             len(r.Workloads),
+		CreatedGhostServices: len(r.Workloads),
+		UpdatedServices:      0,
+	}, nil
+}
+
+func newScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := corev1.AddToScheme(s); err != nil {
+		t.Fatalf("corev1 AddToScheme: %v", err)
+	}
+	if err := appsv1.AddToScheme(s); err != nil {
+		t.Fatalf("appsv1 AddToScheme: %v", err)
+	}
+	return s
+}
+
+func mkDeployment(name, ns string, replicas int32, labels map[string]string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Namespace:         ns,
+			Labels:            labels,
+			CreationTimestamp: metav1.Time{Time: time.Now()},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{Name: "main", Image: "ghcr.io/incidentary/" + name + ":v1"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestRunOnce_EmitsWorkloads(t *testing.T) {
+	ctx := context.Background()
+	s := newScheme(t)
+	depA := mkDeployment("web", "prod", 3, nil)
+	depB := mkDeployment("payments", "prod", 2, nil)
+	system := mkDeployment("kube-proxy", "kube-system", 1, map[string]string{"k8s-app": "kube-proxy"})
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(depA, depB, system).Build()
+	resolver := identity.NewResolver(c)
+	topo := &fakeTopology{}
+
+	l := NewLoop(c, resolver, topoFn(topo), testr.New(t), Options{
+		Interval:    time.Hour,
+		ClusterName: "unit-test",
+	})
+	if err := l.runOnce(ctx); err != nil {
+		t.Fatalf("runOnce err: %v", err)
+	}
+
+	if len(topo.reports) != 1 {
+		t.Fatalf("reports = %d, want 1", len(topo.reports))
+	}
+	r := topo.reports[0]
+	if r.ClusterName != "unit-test" {
+		t.Errorf("cluster_name = %q", r.ClusterName)
+	}
+	// Should have web and payments but not kube-proxy (system workload) and
+	// not anything in kube-system (excluded namespace).
+	if len(r.Workloads) != 2 {
+		t.Fatalf("workloads = %d, want 2 (web, payments)", len(r.Workloads))
+	}
+	names := map[string]bool{}
+	for _, w := range r.Workloads {
+		names[w.ServiceID] = true
+		if w.ServiceIDSource == "" {
+			t.Errorf("workload %q missing service_id_source", w.ServiceID)
+		}
+		if w.Image == "" {
+			t.Errorf("workload %q missing image", w.ServiceID)
+		}
+	}
+	if !names["web"] || !names["payments"] {
+		t.Errorf("missing expected workloads, got %+v", names)
+	}
+	if names["kube-proxy"] {
+		t.Errorf("system workload should not appear in report")
+	}
+
+	if l.WatchedWorkloads() != 2 {
+		t.Errorf("WatchedWorkloads = %d, want 2", l.WatchedWorkloads())
+	}
+	if l.LastReport().IsZero() {
+		t.Errorf("LastReport should be set after successful run")
+	}
+}
+
+func TestRunOnce_ExcludesNamespaces(t *testing.T) {
+	ctx := context.Background()
+	s := newScheme(t)
+	ignored := mkDeployment("worker", "ignored-ns", 1, nil)
+	kept := mkDeployment("web", "prod", 1, nil)
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ignored, kept).Build()
+	resolver := identity.NewResolver(c)
+	topo := &fakeTopology{}
+
+	l := NewLoop(c, resolver, topoFn(topo), testr.New(t), Options{
+		Interval:          time.Hour,
+		ExcludeNamespaces: []string{"ignored-ns"},
+	})
+	if err := l.runOnce(ctx); err != nil {
+		t.Fatalf("runOnce err: %v", err)
+	}
+	if len(topo.reports) != 1 {
+		t.Fatalf("reports = %d", len(topo.reports))
+	}
+	if len(topo.reports[0].Workloads) != 1 || topo.reports[0].Workloads[0].ServiceID != "web" {
+		t.Errorf("expected only web, got %+v", topo.reports[0].Workloads)
+	}
+}
+
+func TestRunOnce_NoWorkloads(t *testing.T) {
+	ctx := context.Background()
+	s := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	topo := &fakeTopology{}
+	l := NewLoop(c, identity.NewResolver(c), topoFn(topo), testr.New(t), Options{Interval: time.Hour})
+
+	if err := l.runOnce(ctx); err != nil {
+		t.Fatalf("runOnce err: %v", err)
+	}
+	if len(topo.reports) != 0 {
+		t.Errorf("empty cluster should not emit a report, got %d", len(topo.reports))
+	}
+}
+
+func TestRunOnce_TopologyError(t *testing.T) {
+	ctx := context.Background()
+	s := newScheme(t)
+	d := mkDeployment("web", "prod", 1, nil)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(d).Build()
+
+	topo := &fakeTopology{err: errors.New("boom")}
+	l := NewLoop(c, identity.NewResolver(c), topoFn(topo), testr.New(t), Options{Interval: time.Hour})
+
+	if err := l.runOnce(ctx); err == nil {
+		t.Fatal("expected error")
+	}
+	// LastReport should remain zero because the cycle did not succeed.
+	if !l.LastReport().IsZero() {
+		t.Errorf("LastReport should be zero after failed report")
+	}
+}
+
+func TestLoop_NeedLeaderElection(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	l := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+	if !l.NeedLeaderElection() {
+		t.Error("NeedLeaderElection should be true")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// StatefulSet and DaemonSet collection
+// -----------------------------------------------------------------------------
+
+func mkStatefulSet(name, ns string, image string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: appsv1.StatefulSetSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "main", Image: image}},
+				},
+			},
+		},
+	}
+}
+
+func mkDaemonSet(name, ns string, image string, labels map[string]string) *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+		Spec: appsv1.DaemonSetSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "main", Image: image}},
+				},
+			},
+		},
+	}
+}
+
+func TestRunOnce_IncludesStatefulSetAndDaemonSet(t *testing.T) {
+	s := newScheme(t)
+	dep := mkDeployment("web", "prod", 2, nil)
+	sts := mkStatefulSet("db", "prod", "postgres:15")
+	ds := mkDaemonSet("fluentd", "prod", "fluent/fluentd:v1", nil)
+	// kube-proxy should be filtered by isSystemWorkload (k8s-app label).
+	sysDaemon := mkDaemonSet("kube-proxy", "kube-system", "kube-proxy:v1",
+		map[string]string{"k8s-app": "kube-proxy"})
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, sts, ds, sysDaemon).Build()
+	topo := &fakeTopology{}
+	l := NewLoop(c, identity.NewResolver(c), topoFn(topo), testr.New(t), Options{
+		Interval: time.Hour,
+	})
+
+	if err := l.runOnce(context.Background()); err != nil {
+		t.Fatalf("runOnce error: %v", err)
+	}
+
+	if len(topo.reports) != 1 {
+		t.Fatalf("reports = %d, want 1", len(topo.reports))
+	}
+	workloads := topo.reports[0].Workloads
+
+	kinds := map[string]string{}
+	for _, w := range workloads {
+		kinds[w.ServiceID] = w.Kind
+	}
+
+	if kinds["web"] != "Deployment" {
+		t.Errorf("web kind = %q, want Deployment", kinds["web"])
+	}
+	if kinds["db"] != "StatefulSet" {
+		t.Errorf("db kind = %q, want StatefulSet", kinds["db"])
+	}
+	if kinds["fluentd"] != "DaemonSet" {
+		t.Errorf("fluentd kind = %q, want DaemonSet", kinds["fluentd"])
+	}
+	if _, found := kinds["kube-proxy"]; found {
+		t.Errorf("system workload kube-proxy should not appear in report")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// isSystemWorkload
+// -----------------------------------------------------------------------------
+
+func TestIsSystemWorkload(t *testing.T) {
+	cases := []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{"nil labels", nil, false},
+		{"no relevant labels", map[string]string{"app": "web"}, false},
+		{"k8s-app set", map[string]string{"k8s-app": "kube-proxy"}, true},
+		{"controller-manager component", map[string]string{"app.kubernetes.io/component": "controller-manager"}, true},
+		{"other component", map[string]string{"app.kubernetes.io/component": "scheduler"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSystemWorkload(tc.labels); got != tc.want {
+				t.Errorf("isSystemWorkload(%v) = %v, want %v", tc.labels, got, tc.want)
+			}
+		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// primaryImage
+// -----------------------------------------------------------------------------
+
+func TestPrimaryImage_EmptyContainers(t *testing.T) {
+	if got := primaryImage(nil); got != "" {
+		t.Errorf("primaryImage(nil) = %q, want empty", got)
+	}
+	if got := primaryImage([]corev1.Container{}); got != "" {
+		t.Errorf("primaryImage([]) = %q, want empty", got)
+	}
+}
+
+func TestPrimaryImage_FirstContainer(t *testing.T) {
+	containers := []corev1.Container{
+		{Image: "main-image:v1"},
+		{Image: "sidecar:v2"},
+	}
+	if got := primaryImage(containers); got != "main-image:v1" {
+		t.Errorf("primaryImage = %q, want main-image:v1", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// fallbackName / sourceString
+// -----------------------------------------------------------------------------
+
+func TestFallbackName_PreferredUsedWhenSet(t *testing.T) {
+	if got := fallbackName("preferred", "fallback"); got != "preferred" {
+		t.Errorf("fallbackName = %q, want preferred", got)
+	}
+}
+
+func TestFallbackName_FallbackUsedWhenPreferredEmpty(t *testing.T) {
+	if got := fallbackName("", "fallback"); got != "fallback" {
+		t.Errorf("fallbackName = %q, want fallback", got)
+	}
+}
+
+func TestSourceString_EmptyDefaultsToWorkloadName(t *testing.T) {
+	if got := sourceString(""); got != "workload_name" {
+		t.Errorf("sourceString(\"\") = %q, want workload_name", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// deref
+// -----------------------------------------------------------------------------
+
+func TestDeref_Nil(t *testing.T) {
+	if got := deref(nil); got != 0 {
+		t.Errorf("deref(nil) = %d, want 0", got)
+	}
+}
+
+func TestDeref_NonNil(t *testing.T) {
+	n := int32(5)
+	if got := deref(&n); got != 5 {
+		t.Errorf("deref(&5) = %d, want 5", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// NewLoop nil-guard panics
+// -----------------------------------------------------------------------------
+
+func TestNewLoop_NilClientPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil client")
+		}
+	}()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	_ = NewLoop(nil, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+}
+
+func TestNewLoop_NilResolverPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil resolver")
+		}
+	}()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	_ = NewLoop(c, nil, topoFn(&fakeTopology{}), testr.New(t), Options{})
+}
+
+func TestNewLoop_NilTopologyPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil topologyFn")
+		}
+	}()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	_ = NewLoop(c, identity.NewResolver(c), nil, testr.New(t), Options{})
+}
+
+// -----------------------------------------------------------------------------
+// Hardening edge cases for runOnce.
+// -----------------------------------------------------------------------------
+
+// TestRunOnce_PropagatesAPIServerError verifies the loop surfaces
+// an error when the K8s API server is unreachable mid-list. The
+// controller-runtime upstream framework retries on the next tick,
+// so the loop's responsibility is just to NOT swallow the failure.
+func TestRunOnce_PropagatesAPIServerError(t *testing.T) {
+	ctx := context.Background()
+	s := newScheme(t)
+	// erroringClient returns the configured error on every List call.
+	c := &erroringReader{
+		Reader: fake.NewClientBuilder().WithScheme(s).Build(),
+		err:    errors.New("connection refused"),
+	}
+	resolver := identity.NewResolver(fake.NewClientBuilder().WithScheme(s).Build())
+	topo := &fakeTopology{}
+
+	l := NewLoop(c, resolver, topoFn(topo), testr.New(t), Options{
+		Interval:    time.Hour,
+		ClusterName: "api-down",
+	})
+	err := l.runOnce(ctx)
+	if err == nil {
+		t.Fatalf("expected error from runOnce when API server is unreachable")
+	}
+	if len(topo.reports) != 0 {
+		t.Errorf("no topology report should be sent when discovery fails; got %d", len(topo.reports))
+	}
+}
+
+// erroringReader wraps a client.Reader and forces every List
+// operation to return a configured error. Get is delegated to the
+// underlying fake so resolver setup still works.
+type erroringReader struct {
+	client.Reader
+	err error
+}
+
+func (e *erroringReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if e.err != nil {
+		return e.err
+	}
+	return e.Reader.List(ctx, list, opts...)
+}
+
+// TestResolveClusterUID_ReturnsEmptyOnAPIFailure verifies the
+// lazy resolution falls back gracefully when the
+// kube-system Get returns an error. The empty result causes the
+// topology field to be omitted (omitempty), and the backend stays
+// on the legacy cluster_name keying.
+func TestResolveClusterUID_ReturnsEmptyOnAPIFailure(t *testing.T) {
+	ctx := context.Background()
+	c := &erroringReader{
+		Reader: fake.NewClientBuilder().WithScheme(newScheme(t)).Build(),
+		err:    errors.New("namespace not found"),
+	}
+	l := NewLoop(c, identity.NewResolver(c), topoFn(&fakeTopology{}), testr.New(t), Options{})
+	uid := l.resolveClusterUID(ctx)
+	if uid != "" {
+		t.Errorf("resolveClusterUID should return empty on API failure; got %q", uid)
+	}
+}
+
+// TestRunOnce_HandlesLargeWorkloadGraph stress-tests the discovery
+// loop with 5 000 deployments — the realistic ceiling for a busy
+// cluster. The test verifies (1) the loop completes without OOM or
+// timeout, (2) every workload reaches the topology report, and
+// (3) the count gauge tracks accurately. The actual per-workload
+// payload is small in this fake-client scenario, but iteration
+// pressure is real (5 000 ResolveRef calls + 5 000 conversion
+// calls).
+func TestRunOnce_HandlesLargeWorkloadGraph(t *testing.T) {
+	const N = 5_000
+	ctx := context.Background()
+	s := newScheme(t)
+	objs := make([]client.Object, 0, N)
+	for i := range N {
+		objs = append(objs, mkDeployment(
+			fmt.Sprintf("svc-%05d", i),
+			"prod",
+			1,
+			nil,
+		))
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+	resolver := identity.NewResolver(c)
+	topo := &fakeTopology{}
+
+	l := NewLoop(c, resolver, topoFn(topo), testr.New(t), Options{
+		Interval:    time.Hour,
+		ClusterName: "stress-test",
+	})
+
+	start := time.Now()
+	if err := l.runOnce(ctx); err != nil {
+		t.Fatalf("runOnce err on %d-workload graph: %v", N, err)
+	}
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Errorf("runOnce on %d workloads took %v; expected <30s", N, elapsed)
+	}
+
+	if len(topo.reports) != 1 {
+		t.Fatalf("reports = %d, want 1", len(topo.reports))
+	}
+	r := topo.reports[0]
+	if len(r.Workloads) != N {
+		t.Errorf("workloads = %d, want %d", len(r.Workloads), N)
+	}
+	if int(l.WatchedWorkloads()) != N {
+		t.Errorf("WatchedWorkloads = %d, want %d", l.WatchedWorkloads(), N)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// conditionsFromDeployment — loop body (non-empty slice)
+// -----------------------------------------------------------------------------
+
+func TestConditionsFromDeployment_NonEmpty(t *testing.T) {
+	conds := []appsv1.DeploymentCondition{
+		{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+		{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse},
+	}
+	out := conditionsFromDeployment(conds)
+	if len(out) != 2 {
+		t.Fatalf("len = %d, want 2", len(out))
+	}
+	if out[0].Type != string(appsv1.DeploymentAvailable) {
+		t.Errorf("out[0].Type = %q, want %q", out[0].Type, appsv1.DeploymentAvailable)
+	}
+	if out[1].Status != string(corev1.ConditionFalse) {
+		t.Errorf("out[1].Status = %q, want %q", out[1].Status, corev1.ConditionFalse)
+	}
+}

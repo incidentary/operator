@@ -1,0 +1,40 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "incidentary-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "incidentary-operator.labels" . | nindent 4 }}
+rules:
+  # Leader election — the operator writes a Lease to claim leadership.
+  # Scoped to the operator's own namespace so no cluster-wide write grant
+  # is needed.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+
+  # Leader-election audit events — controller-runtime records a Normal event
+  # on its Lease when a new leader is elected. Scoped to the operator's own
+  # namespace only; the cluster-scoped read on events from the ClusterRole is
+  # for watching, not for creating.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # IncidentaryConfig status subresource updates. Scoped to the operator's
+  # namespace because the CRD is namespaced.
+  - apiGroups: ["incidentary.incidentary.com"]
+    resources: ["incidentaryconfigs"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["incidentary.incidentary.com"]
+    resources: ["incidentaryconfigs/status"]
+    verbs: ["get", "update", "patch"]
+
+  # API-key Secret referenced by IncidentaryConfig.
+  # Read the API key Secret only in the operator's own namespace,
+  # not cluster-wide. Customers whose IncidentaryConfig references a
+  # Secret in a different namespace should add a separate
+  # Role/RoleBinding there.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]

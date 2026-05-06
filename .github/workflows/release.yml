@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  REGISTRY: ghcr.io
+  IMAGE_NAME: incidentary/operator
+  CHART_NAME: incidentary-operator
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # id-token: write enables keyless cosign signing via GitHub's
+      # OIDC provider — no long-lived signing key in the repo. The
+      # release self-verifies both image and chart before exiting.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push container image
+        id: build_image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      # Sign the multi-arch image manifest with cosign keyless. The
+      # transparency log is rekor.sigstore.dev (default). Verification
+      # path documented in operator/SECURITY.md.
+      - name: Cosign sign image
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign sign --yes \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}
+
+      # Trivy CVE scan blocks the release on HIGH or CRITICAL severity
+      # CVEs. Runs AFTER the multi-arch image push (so the scanner can
+      # pull the actual published image) and BEFORE the chart push (so a
+      # CVE failure aborts the release before any chart references the
+      # vulnerable image). Documented response policy: HIGH/CRITICAL CVEs
+      # patched within 14 days — see SECURITY.md.
+      - name: Trivy CVE scan (HIGH/CRITICAL gate)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: '1'
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.0
+
+      - name: Log in to GHCR OCI for Helm
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Update Chart.yaml version from tag
+        run: |
+          sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" charts/${{ env.CHART_NAME }}/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" charts/${{ env.CHART_NAME }}/Chart.yaml
+
+      - name: Update image tag in values.yaml
+        run: |
+          sed -i "s|tag:.*|tag: \"${{ github.ref_name }}\"|" charts/${{ env.CHART_NAME }}/values.yaml
+
+      - name: Package Helm chart
+        run: helm package charts/${{ env.CHART_NAME }}
+
+      - name: Push Helm chart to GHCR OCI
+        id: push_chart
+        run: |
+          DIGEST=$(helm push ${{ env.CHART_NAME }}-${{ steps.version.outputs.version }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/charts 2>&1 | grep -oP 'Digest: \Ksha256:[a-f0-9]+')
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # Sign the OCI-published Helm chart with the same keyless flow.
+      # `cosign sign` against an OCI ref signs the chart manifest.
+      - name: Cosign sign chart
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign sign --yes \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/charts/${{ env.CHART_NAME }}@${{ steps.push_chart.outputs.digest }}
+
+      # Self-verify before declaring the release green. If verify
+      # fails, the release fails.
+      - name: Cosign verify image + chart
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${{ github.repository_owner }}/.+" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${{ github.repository_owner }}/.+" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/charts/${{ env.CHART_NAME }}@${{ steps.push_chart.outputs.digest }}

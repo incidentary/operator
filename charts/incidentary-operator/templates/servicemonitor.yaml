@@ -1,0 +1,36 @@
+{{- if .Values.serviceMonitor.enabled }}
+# ServiceMonitor template — off by default.
+# Enable when the cluster runs the Prometheus Operator and the operator's
+# /metrics endpoint should be auto-scraped.
+#
+# Requires the prometheus-operator CRDs to be installed in the cluster
+# (`monitoring.coreos.com/v1`). Otherwise `helm install` fails with
+# `no matches for kind "ServiceMonitor"`.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "incidentary-operator.fullname" . }}
+  namespace: {{ .Values.serviceMonitor.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "incidentary-operator.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "incidentary-operator.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout | default "10s" }}
+      {{- if .Values.metricsSecure }}
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: {{ .Values.serviceMonitor.tlsInsecureSkipVerify | default false }}
+      {{- end }}
+{{- end }}
